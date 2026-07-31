@@ -15,14 +15,21 @@ import type {WalletProvider} from '../chain/walletProvider.js';
 import type {Config} from '../config/config.js';
 import {createLogger} from '../logging/logger.js';
 import type {Logger} from '../logging/logger.js';
+import {DepositService} from '../uniswap/depositService.js';
+import {createPoolReader} from '../uniswap/poolReader.js';
 
-/** Token spent on every buy. */
+/** Token spent on every buy, and the counter-asset of the LP pool. */
 const SELL_SYMBOL = 'USDG';
 
 export interface Container {
   readonly logger: Logger;
   readonly wallet: WalletProvider;
   readonly buyService: SpotBuyService;
+  /**
+   * Async because token decimals are resolved from the Arcus router rather
+   * than hard-coded.
+   */
+  createDepositService(): Promise<DepositService>;
 }
 
 export function createContainer(config: Config): Container {
@@ -41,7 +48,36 @@ export function createContainer(config: Config): Container {
     sellSymbol: SELL_SYMBOL,
   });
 
-  return {logger, wallet, buyService};
+  async function createDepositService(): Promise<DepositService> {
+    const [usdgToken, stockToken] = await Promise.all([
+      tokens.bySymbol(SELL_SYMBOL),
+      tokens.byAddress(config.stockTokenAddress),
+    ]);
+
+    return new DepositService({
+      wallet,
+      poolReader: createPoolReader(wallet.getPublicClient(), config.chainId),
+      logger,
+      chainId: config.chainId,
+      usdg: {
+        address: usdgToken.address,
+        symbol: usdgToken.symbol,
+        decimals: usdgToken.decimals,
+      },
+      stock: {
+        address: stockToken.address,
+        symbol: stockToken.symbol,
+        decimals: stockToken.decimals,
+      },
+      rangeDeviationPercent: config.rangeDeviationPercent,
+      poolFee: config.poolFee,
+      poolTickSpacing: config.poolTickSpacing,
+      lpSlippageBps: config.lpSlippageBps,
+      mintDeadlineSeconds: config.mintDeadlineSeconds,
+    });
+  }
+
+  return {logger, wallet, buyService, createDepositService};
 }
 
 export {SELL_SYMBOL};

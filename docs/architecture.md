@@ -2,7 +2,9 @@
 
 `arcusamm` is an automated market-making bot for tokenized stocks on Robinhood Chain. The full strategy buys a stock token on Arcus spot, deposits it into a Uniswap v4 USDG/stock pool with a concentrated range, and rebalances when the pool shifts fully to one side.
 
-**Currently implemented: step 1 only** — a manually triggered Arcus spot buy. See [plans/0001-arcus-spot-buy-cli.md](../plans/0001-arcus-spot-buy-cli.md).
+**Currently implemented: steps 1–3** — a manually triggered Arcus spot buy ([plan 0001](../plans/0001-arcus-spot-buy-cli.md)) followed by a Uniswap v4 position with a ±X% range ([plan 0002](../plans/0002-uniswap-v4-lp-deposit.md)). Step 4 (monitoring and rebalancing) is not built.
+
+The Arcus buy delivers the **plain** stock token — the same one the v4 pool uses — confirmed from the `SwapExecuted` logs of a live trade. No wrap/unwrap step is needed.
 
 ## Modules
 
@@ -12,8 +14,9 @@
 | `logging/` | pino factory with secret redaction; child loggers bind a `tradeId` so one trade is traceable end to end. |
 | `chain/` | viem `Chain` for Robinhood Chain (4663) and the `WalletProvider` that derives the production account from `SEED`. |
 | `arcus/` | Token resolution from the router list, typed errors, and `SpotBuyService` — the quote → sign → submit → poll flow. |
+| `uniswap/` | v4 deployment addresses, tick and liquidity math, pool reads, range calculation, Permit2 approvals, mint encoding, and the deposit orchestration. |
 | `di/` | The single composition root. Everything else takes dependencies as constructor parameters. |
-| `cli/` | `buyCommand.ts` holds the command logic (IO-free, so the confirmation gate is testable); `buy.ts` and `quote.ts` are thin entrypoints. |
+| `cli/` | `buyCommand.ts` and `depositCommand.ts` hold the command logic (IO-free, so the confirmation gates are testable); `buy.ts`, `quote.ts`, `deposit.ts`, and `position.ts` are thin entrypoints. |
 
 ```mermaid
 graph TD
@@ -34,9 +37,32 @@ graph TD
 | Command | Effect |
 | --- | --- |
 | `npm run quote` | Read-only. Resolves tokens, quotes, and validates, then stops. |
-| `npm run buy` | The same steps, then permit, sign, submit, and poll — after the operator types `yes`. |
+| `npm run position` | Read-only. Reads the pool and balances, computes the range and both legs, then stops. |
+| `npm run buy` | Buys, then deposits. Two separate confirmations. `--no-deposit` stops after the buy. |
+| `npm run deposit` | Opens a position from the balance already held. |
 
-Both route through `SpotBuyService.prepare`, so the preflight exercises the identical path the buy commits to.
+Each preview shares its code path with the command that spends — `quote` with `SpotBuyService.prepare`, `position` with `DepositService.plan` — so a preflight cannot drift from what actually executes.
+
+## Liquidity position
+
+```mermaid
+graph LR
+    Bal[wallet stock balance] --> L[liquidity]
+    Pool[pool tick] --> R[range ±X%]
+    R --> L
+    L --> A0[USDG required]
+    L --> A1[stock committed]
+    A0 --> Max[amount0Max / amount1Max]
+    A1 --> Max
+    Max --> Mint[MINT_POSITION + SETTLE_PAIR]
+    Mint --> Sim{simulate}
+    Sim -->|reverts| Abort[abort, nothing sent]
+    Sim -->|succeeds| Send[broadcast]
+```
+
+The stock balance is the fixed side: it determines the liquidity, which in turn determines the USDG required. If the wallet is short of that USDG the deposit aborts before anything is approved.
+
+Range bounds are aligned **outward** to the tick spacing, so the realized band is never narrower than requested. Because price is exponential in tick, each side is computed independently — at 3%, the lower bound is ~305 ticks away while the upper is ~296.
 
 ## Buy flow
 

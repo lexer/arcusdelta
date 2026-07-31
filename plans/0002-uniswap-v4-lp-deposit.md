@@ -1,6 +1,6 @@
 # 0002 — Uniswap v4 LP deposit
 
-Status: in progress
+Status: implemented — read path verified against mainnet, mint not yet run live
 
 ## Context
 
@@ -127,3 +127,10 @@ Carried over from 0001, plus:
 - `npm run lint`, `npm run typecheck`, `npm test` green.
 - Read-only preview against mainnet showing the computed range, liquidity, and required amounts for the real wallet balance.
 - Live run executed by the operator, never by the agent.
+
+## Findings from implementation
+
+- **Deployment addresses must be checksummed.** The documented addresses are lowercase; viem rejects a mis-checksummed address at call time. `deployments.test.ts` now asserts every stored address equals its own `getAddress` form, so this fails in CI rather than against the chain.
+- **Arcus delivers the plain stock token**, not a wrapped one. Confirmed from the `SwapExecuted` logs of a live buy: `tokenOut` was `0xd0601CE1…D9EEC`, exactly the token the v4 pool uses. No wrap/unwrap step is needed. Both `wNVDA` and `wUSDG` balances were zero.
+- **The wallet held no stock token when this was built**, because the earlier live buy (10 USDG → 0.0504 NVDA, block 23925409) was followed ~35 seconds later by a sell (0.0755 NVDA → 14.99 USDG, block 23925759). The deposit correctly refused with `InsufficientBalanceError`. The mint path therefore remains unproven against a live pool.
+- The poll/range math was validated against the live pool: `poolId` `0x3bb34a44…` matches the on-chain pool, and observed ticks (223440, later 223446) round-trip through the tick math exactly.

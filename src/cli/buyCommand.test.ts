@@ -16,6 +16,11 @@ const config: Config = {
   stockTokenAddress: '0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC',
   usdgBuyAmount: '100',
   slippageBps: 1,
+  rangeDeviationPercent: 3,
+  poolFee: 3000,
+  poolTickSpacing: 60,
+  lpSlippageBps: 50,
+  mintDeadlineSeconds: 300,
 };
 
 function deps(

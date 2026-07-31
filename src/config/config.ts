@@ -24,6 +24,11 @@ export interface Config {
   readonly stockTokenAddress: `0x${string}`;
   readonly usdgBuyAmount: string;
   readonly slippageBps: number;
+  readonly rangeDeviationPercent: number;
+  readonly poolFee: number;
+  readonly poolTickSpacing: number;
+  readonly lpSlippageBps: number;
+  readonly mintDeadlineSeconds: number;
 }
 
 export type EnvSource = Record<string, string | undefined>;
@@ -51,6 +56,11 @@ export function loadConfig(source: EnvSource = readDotenv()): Config {
     stockTokenAddress: env.STOCK_TOKEN_ADDRESS,
     usdgBuyAmount: env.USDG_BUY_AMOUNT,
     slippageBps: env.SLIPPAGE_BPS,
+    rangeDeviationPercent: env.RANGE_DEVIATION_PERCENT,
+    poolFee: env.POOL_FEE,
+    poolTickSpacing: env.POOL_TICK_SPACING,
+    lpSlippageBps: env.LP_SLIPPAGE_BPS,
+    mintDeadlineSeconds: env.MINT_DEADLINE_SECONDS,
   });
 }
 
@@ -63,5 +73,10 @@ export function loggableConfig(config: Config): Record<string, unknown> {
     stockTokenAddress: config.stockTokenAddress,
     usdgBuyAmount: config.usdgBuyAmount,
     slippageBps: config.slippageBps,
+    rangeDeviationPercent: config.rangeDeviationPercent,
+    poolFee: config.poolFee,
+    poolTickSpacing: config.poolTickSpacing,
+    lpSlippageBps: config.lpSlippageBps,
+    mintDeadlineSeconds: config.mintDeadlineSeconds,
   };
 }

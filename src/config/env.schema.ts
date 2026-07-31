@@ -28,6 +28,19 @@ export const envSchema = z.object({
     .regex(/^\d+(\.\d+)?$/, 'must be a positive decimal number')
     .refine(value => Number(value) > 0, 'must be greater than zero'),
   SLIPPAGE_BPS: z.coerce.number().int().min(0).max(10_000).default(1),
+
+  // Uniswap v4 liquidity position.
+  RANGE_DEVIATION_PERCENT: z.coerce
+    .number()
+    .positive('must be greater than zero')
+    .max(100, 'must be at most 100')
+    .default(3),
+  /** v4 fee units (hundredths of a bip). 3000 = 0.3%. */
+  POOL_FEE: z.coerce.number().int().min(0).max(1_000_000).default(3_000),
+  /** Must match the initialized pool exactly; v4 does not derive it from the fee. */
+  POOL_TICK_SPACING: z.coerce.number().int().positive().default(60),
+  LP_SLIPPAGE_BPS: z.coerce.number().int().min(0).max(10_000).default(50),
+  MINT_DEADLINE_SECONDS: z.coerce.number().int().positive().default(300),
 });
 
 export type Env = z.infer<typeof envSchema>;

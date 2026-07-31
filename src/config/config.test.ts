@@ -23,6 +23,22 @@ describe('loadConfig', () => {
     expect(config.slippageBps).toBe(1);
   });
 
+  it('applies liquidity position defaults', () => {
+    const config = loadConfig(validEnv());
+
+    expect(config.rangeDeviationPercent).toBe(3);
+    expect(config.poolFee).toBe(3000);
+    expect(config.poolTickSpacing).toBe(60);
+    expect(config.lpSlippageBps).toBe(50);
+    expect(config.mintDeadlineSeconds).toBe(300);
+  });
+
+  it('rejects a non-positive range deviation', () => {
+    expect(() => loadConfig(validEnv({RANGE_DEVIATION_PERCENT: '0'}))).toThrow(
+      ConfigError,
+    );
+  });
+
   it('reads overrides from the environment', () => {
     const config = loadConfig(
       validEnv({CHAIN_ID: '46630', SLIPPAGE_BPS: '50', USDG_BUY_AMOUNT: '5.5'}),

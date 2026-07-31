@@ -39,6 +39,7 @@ Use manual constructor injection through a single composition root (`src/di/cont
 
 - Implement iteratively: make small, atomic changes rather than large sweeping ones.
 - Before committing any change, run the full test suite and linters, and ensure they pass.
+- Clear the context after commit. Rely on committed plan as a memory.
 
 ## Arcus SDK
 

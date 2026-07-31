@@ -21,6 +21,10 @@ const config: Config = {
   poolTickSpacing: 60,
   lpSlippageBps: 50,
   mintDeadlineSeconds: 300,
+  poolCheckIntervalSeconds: 30,
+  exitConfirmations: 3,
+  positionLookbackBlocks: 500_000,
+  closeSlippageBps: 100,
 };
 
 function deps(

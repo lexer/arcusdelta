@@ -33,6 +33,21 @@ describe('loadConfig', () => {
     expect(config.mintDeadlineSeconds).toBe(300);
   });
 
+  it('applies monitoring defaults', () => {
+    const config = loadConfig(validEnv());
+
+    expect(config.poolCheckIntervalSeconds).toBe(30);
+    expect(config.exitConfirmations).toBe(3);
+    expect(config.positionLookbackBlocks).toBe(500_000);
+    expect(config.closeSlippageBps).toBe(100);
+  });
+
+  it('rejects a zero exit confirmation count', () => {
+    expect(() => loadConfig(validEnv({EXIT_CONFIRMATIONS: '0'}))).toThrow(
+      ConfigError,
+    );
+  });
+
   it('rejects a non-positive range deviation', () => {
     expect(() => loadConfig(validEnv({RANGE_DEVIATION_PERCENT: '0'}))).toThrow(
       ConfigError,

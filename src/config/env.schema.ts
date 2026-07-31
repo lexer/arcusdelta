@@ -41,6 +41,13 @@ export const envSchema = z.object({
   POOL_TICK_SPACING: z.coerce.number().int().positive().default(60),
   LP_SLIPPAGE_BPS: z.coerce.number().int().min(0).max(10_000).default(50),
   MINT_DEADLINE_SECONDS: z.coerce.number().int().positive().default(300),
+
+  // Position monitoring.
+  POOL_CHECK_INTERVAL_SECONDS: z.coerce.number().int().positive().default(30),
+  /** Consecutive out-of-range polls required before closing. */
+  EXIT_CONFIRMATIONS: z.coerce.number().int().positive().default(3),
+  POSITION_LOOKBACK_BLOCKS: z.coerce.number().int().positive().default(500_000),
+  CLOSE_SLIPPAGE_BPS: z.coerce.number().int().min(0).max(10_000).default(100),
 });
 
 export type Env = z.infer<typeof envSchema>;

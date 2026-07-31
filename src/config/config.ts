@@ -29,6 +29,10 @@ export interface Config {
   readonly poolTickSpacing: number;
   readonly lpSlippageBps: number;
   readonly mintDeadlineSeconds: number;
+  readonly poolCheckIntervalSeconds: number;
+  readonly exitConfirmations: number;
+  readonly positionLookbackBlocks: number;
+  readonly closeSlippageBps: number;
 }
 
 export type EnvSource = Record<string, string | undefined>;
@@ -61,6 +65,10 @@ export function loadConfig(source: EnvSource = readDotenv()): Config {
     poolTickSpacing: env.POOL_TICK_SPACING,
     lpSlippageBps: env.LP_SLIPPAGE_BPS,
     mintDeadlineSeconds: env.MINT_DEADLINE_SECONDS,
+    poolCheckIntervalSeconds: env.POOL_CHECK_INTERVAL_SECONDS,
+    exitConfirmations: env.EXIT_CONFIRMATIONS,
+    positionLookbackBlocks: env.POSITION_LOOKBACK_BLOCKS,
+    closeSlippageBps: env.CLOSE_SLIPPAGE_BPS,
   });
 }
 
@@ -78,5 +86,9 @@ export function loggableConfig(config: Config): Record<string, unknown> {
     poolTickSpacing: config.poolTickSpacing,
     lpSlippageBps: config.lpSlippageBps,
     mintDeadlineSeconds: config.mintDeadlineSeconds,
+    poolCheckIntervalSeconds: config.poolCheckIntervalSeconds,
+    exitConfirmations: config.exitConfirmations,
+    positionLookbackBlocks: config.positionLookbackBlocks,
+    closeSlippageBps: config.closeSlippageBps,
   };
 }

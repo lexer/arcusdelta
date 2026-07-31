@@ -21,13 +21,19 @@ strictNullChecks
 noUncheckedIndexedAccess
 exactOptionalPropertyTypes
 
+## Plans
+
+Keep plans in the repo in /plans subfolder
+
 ## Modularization
 
 Keep the code organized in modules by follow industry best practices for TypeScript. 
 
 ## Dependency injection
 
-Use [samber/do](https://github.com/samber/do) exclusively for dependency injection. Do not introduce other DI frameworks or hand-rolled DI containers. Use v2 version.
+Use manual constructor injection through a single composition root (`src/di/container.ts`). Modules declare their dependencies as constructor parameters typed against interfaces; only the composition root constructs concrete implementations and wires them together. Do not introduce a DI framework or a runtime container.
+
+(This project originally specified [samber/do](https://github.com/samber/do), which is a Go library with no TypeScript port. Manual constructor injection preserves its explicit, type-safe, no-magic approach.)
 
 ## Development workflow
 

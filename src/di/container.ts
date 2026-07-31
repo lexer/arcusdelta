@@ -16,7 +16,10 @@ import type {Config} from '../config/config.js';
 import {createLogger} from '../logging/logger.js';
 import type {Logger} from '../logging/logger.js';
 import {DepositService} from '../uniswap/depositService.js';
+import {createPoolKey} from '../uniswap/poolKey.js';
 import {createPoolReader} from '../uniswap/poolReader.js';
+import {PositionMonitor} from '../uniswap/positionMonitor.js';
+import {createPositionReader} from '../uniswap/positionReader.js';
 
 /** Token spent on every buy, and the counter-asset of the LP pool. */
 const SELL_SYMBOL = 'USDG';
@@ -30,6 +33,7 @@ export interface Container {
    * than hard-coded.
    */
   createDepositService(): Promise<DepositService>;
+  createMonitor(dryRun: boolean): Promise<PositionMonitor>;
 }
 
 export function createContainer(config: Config): Container {
@@ -77,7 +81,50 @@ export function createContainer(config: Config): Container {
     });
   }
 
-  return {logger, wallet, swapService, createDepositService};
+  async function createMonitor(dryRun: boolean): Promise<PositionMonitor> {
+    const [usdgToken, stockToken] = await Promise.all([
+      tokens.bySymbol(SELL_SYMBOL),
+      tokens.byAddress(config.stockTokenAddress),
+    ]);
+
+    return new PositionMonitor({
+      wallet,
+      poolReader: createPoolReader(wallet.getPublicClient(), config.chainId),
+      positionReader: createPositionReader(
+        wallet.getPublicClient(),
+        config.chainId,
+        config.positionLookbackBlocks,
+        logger,
+      ),
+      swapService,
+      logger,
+      chainId: config.chainId,
+      poolKey: createPoolKey(
+        usdgToken.address,
+        stockToken.address,
+        config.poolFee,
+        config.poolTickSpacing,
+      ),
+      usdg: {
+        address: usdgToken.address,
+        symbol: usdgToken.symbol,
+        decimals: usdgToken.decimals,
+      },
+      stock: {
+        address: stockToken.address,
+        symbol: stockToken.symbol,
+        decimals: stockToken.decimals,
+      },
+      checkIntervalSeconds: config.poolCheckIntervalSeconds,
+      exitConfirmations: config.exitConfirmations,
+      closeSlippageBps: config.closeSlippageBps,
+      sellSlippageBps: config.slippageBps,
+      mintDeadlineSeconds: config.mintDeadlineSeconds,
+      dryRun,
+    });
+  }
+
+  return {logger, wallet, swapService, createDepositService, createMonitor};
 }
 
 export {SELL_SYMBOL};

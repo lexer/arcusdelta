@@ -6,7 +6,7 @@ Automated market-making bot for tokenized stocks on Arcus spot and Robinhood Cha
 
 ## Status
 
-Steps 1–3 are implemented: buy a stock token on Arcus, then open a Uniswap v4 position with a ±X% range around the pool price. Step 4 — monitoring the pool and closing/rebalancing when it shifts fully to one side — is not built yet. See [docs/architecture.md](docs/architecture.md).
+The full strategy is implemented: buy a stock token on Arcus, open a Uniswap v4 position with a ±X% range, then watch the pool and exit when it goes one-sided — closing the position, collecting fees, and selling the stock token back to USDG. See [docs/architecture.md](docs/architecture.md).
 
 ## Setup
 
@@ -31,14 +31,19 @@ Fill in `.env`. `SEED` is the production wallet mnemonic and has no default; eve
 | `POOL_TICK_SPACING` | `60` |
 | `LP_SLIPPAGE_BPS` | `50` |
 | `MINT_DEADLINE_SECONDS` | `300` |
+| `POOL_CHECK_INTERVAL_SECONDS` | `30` |
+| `EXIT_CONFIRMATIONS` | `3` |
+| `POSITION_LOOKBACK_BLOCKS` | `500000` |
+| `CLOSE_SLIPPAGE_BPS` | `100` |
 
 `POOL_FEE` and `POOL_TICK_SPACING` must together match an initialized pool — v4 does not derive one from the other, and a mismatched pair addresses a different pool.
 
 ## Read-only previews
 
 ```sh
-npm run quote      # what the Arcus buy would cost
-npm run position   # what liquidity position would be opened
+npm run quote                # what the Arcus buy would cost
+npm run position             # what liquidity position would be opened
+npm run monitor -- --dry-run # which positions are watched, and their status
 ```
 
 Neither signs, approves, nor mints. Both run the same code paths the spending commands do, then stop — so they are always safe, and they show the real numbers.
@@ -61,6 +66,22 @@ npm run deposit
 Opens a position from the stock-token balance the wallet already holds, without buying. Use this when a balance was acquired earlier.
 
 The position uses the wallet's **entire** stock-token balance as the fixed side and derives the USDG needed for the range; it fails clearly if USDG is short. Start with a small `USDG_BUY_AMOUNT` on your first live run.
+
+## Monitoring
+
+```sh
+npm run monitor
+```
+
+A long-running loop. Every `POOL_CHECK_INTERVAL_SECONDS` it checks whether the pool has left each position's range. After `EXIT_CONFIRMATIONS` consecutive out-of-range readings it closes the position, collects principal and fees, and sells the stock token back to USDG on Arcus.
+
+**This runs unattended and moves real funds without prompting.** It only ever touches positions the wallet owns *in the configured pool* — position NFTs from other pools are invisible to it. Every transaction is simulated first, and a revert aborts without broadcasting.
+
+- `--dry-run` runs the full detection path and reports what it would do, sending nothing.
+- `--token-id <id>` watches a single position.
+- `--max-polls <n>` stops after a fixed number of checks.
+
+The debounce exists so a single-block wick that mean-reverts cannot trigger a close. At the defaults, a position must read out-of-range for ~90 seconds before it exits.
 
 ## Development
 

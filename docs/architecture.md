@@ -40,6 +40,7 @@ graph TD
 | `npm run position` | Read-only. Reads the pool and balances, computes the range and both legs, then stops. |
 | `npm run buy` | Buys, then deposits. Two separate confirmations. `--no-deposit` stops after the buy. |
 | `npm run deposit` | Opens a position from the balance already held. |
+| `npm run monitor` | Long-running. Closes positions that go one-sided and sells the stock token. `--dry-run` sends nothing. |
 
 Each preview shares its code path with the command that spends — `quote` with `SpotBuyService.prepare`, `position` with `DepositService.plan` — so a preflight cannot drift from what actually executes.
 
@@ -63,6 +64,31 @@ graph LR
 The stock balance is the fixed side: it determines the liquidity, which in turn determines the USDG required. If the wallet is short of that USDG the deposit aborts before anything is approved.
 
 Range bounds are aligned **outward** to the tick spacing, so the realized band is never narrower than requested. Because price is exponential in tick, each side is computed independently — at 3%, the lower bound is ~305 ticks away while the upper is ~296.
+
+## Exit
+
+`currency0` is USDG and `currency1` is the stock token, so by Uniswap's convention:
+
+| Pool tick | Position holds | Meaning |
+| --- | --- | --- |
+| `<= tickLower` | only USDG | the pool moved fully to USDG |
+| `>= tickUpper` | only the stock token | the pool moved fully to stock |
+
+Either way the position has stopped earning a two-sided spread and is closed. `BURN_POSITION` removes the liquidity and returns accrued fees in the same call, `TAKE_PAIR` sweeps both currencies back to the wallet, and any stock token is then sold to USDG on Arcus — so the resting state is all USDG.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Watching
+    Watching --> Breaching: tick outside range
+    Breaching --> Watching: back in range (counter resets)
+    Breaching --> Closing: N consecutive breaches
+    Closing --> Selling: burn + take pair
+    Selling --> [*]: stock sold to USDG
+```
+
+The breach counter is what stops a momentary wick from realizing a loss; it resets the instant the pool reads back in range.
+
+Discovery filters positions by **pool id**, not just the token pair, so every field of the pool key must match. The wallet holds position NFTs from unrelated pools, and this is what keeps them out of reach of the closer.
 
 ## Buy flow
 

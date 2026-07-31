@@ -13,6 +13,7 @@
     "quote": "tsx src/cli/quote.ts",
     "deposit": "tsx src/cli/deposit.ts",
     "position": "tsx src/cli/position.ts",
+    "monitor": "tsx src/cli/monitor.ts",
     "lint": "gts lint",
     "fix": "gts fix",
     "typecheck": "tsc --noEmit",

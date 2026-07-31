@@ -1,6 +1,6 @@
 # 0003 — Position monitor, close, and rebalance
 
-Status: in progress
+Status: implemented — detection verified against mainnet, close/sell not yet triggered live
 
 ## Context
 
@@ -88,3 +88,10 @@ src/cli/monitor.ts     entrypoint
 - `npm run lint`, `npm run typecheck`, `npm test` green.
 - `npm run monitor -- --dry-run` against mainnet, showing the live position and its in/out-of-range status.
 - Live unattended run launched by the operator, never by the agent.
+
+## Findings from implementation
+
+- `npm run monitor -- --dry-run --max-polls 3` ran against mainnet: discovery scanned blocks 23785093–24285093, found 1 candidate, and matched exactly 1 (`422596`) after pool-id filtering — the wallet's other position NFTs were correctly excluded. Pool tick `223533` classified `in-range` against `[223080, 223740]`, and polling held the 30s interval.
+- The Arcus service was renamed `SpotBuyService` → `SpotSwapService` and its permit/sign/submit/poll tail extracted into `settle`, so the new sell direction reuses the exact path the buy has already run live. All 13 pre-existing buy tests passed unchanged through the refactor.
+- **The close and sell have never executed live.** The position has stayed in range, so the burn encoding and the sell leg are proven only by unit tests and simulation-before-broadcast. This is the main residual risk, equivalent to where the mint stood before it first ran.
+- Exit boundaries are inclusive (`tick <= tickLower`, `tick >= tickUpper`): at exactly `tickLower` the position holds no stock token, so it is already one-sided.

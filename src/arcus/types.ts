@@ -14,6 +14,19 @@ export interface BuyRequest {
   readonly slippageBps: number;
 }
 
+/**
+ * Sells an exact on-chain balance back into the quote currency.
+ *
+ * Atoms, not a decimal string: the caller is spending a balance it read from
+ * chain and must spend it exactly.
+ */
+export interface SellRequest {
+  readonly tradeId: string;
+  readonly sellToken: Hex;
+  readonly sellAmountAtoms: bigint;
+  readonly slippageBps: number;
+}
+
 /** What a buy would do right now, in human units. Nothing is committed. */
 export interface QuotePreview {
   readonly tradeId: string;

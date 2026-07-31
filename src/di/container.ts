@@ -7,7 +7,7 @@
  */
 
 import {SpotRouterClient} from '@arcus-xyz/arcus-spot-sdk';
-import {SpotBuyService} from '../arcus/spotBuyService.js';
+import {SpotSwapService} from '../arcus/spotSwapService.js';
 import {TokenResolver} from '../arcus/tokenResolver.js';
 import {createRobinhoodChain} from '../chain/robinhoodChain.js';
 import {createWalletProvider} from '../chain/walletProvider.js';
@@ -24,7 +24,7 @@ const SELL_SYMBOL = 'USDG';
 export interface Container {
   readonly logger: Logger;
   readonly wallet: WalletProvider;
-  readonly buyService: SpotBuyService;
+  readonly swapService: SpotSwapService;
   /**
    * Async because token decimals are resolved from the Arcus router rather
    * than hard-coded.
@@ -39,7 +39,7 @@ export function createContainer(config: Config): Container {
   const router = new SpotRouterClient({baseUrl: config.arcusRouterUrl});
   const tokens = new TokenResolver(router, config.chainId);
 
-  const buyService = new SpotBuyService({
+  const swapService = new SpotSwapService({
     router,
     wallet,
     tokens,
@@ -77,7 +77,7 @@ export function createContainer(config: Config): Container {
     });
   }
 
-  return {logger, wallet, buyService, createDepositService};
+  return {logger, wallet, swapService, createDepositService};
 }
 
 export {SELL_SYMBOL};

@@ -30,7 +30,7 @@ async function main(): Promise<number> {
   const tradeId = randomUUID();
   const config = loadConfig();
   const container = createContainer(config);
-  const {logger, wallet, buyService} = container;
+  const {logger, wallet, swapService} = container;
   const log = logger.child({tradeId});
   const startedAt = Date.now();
   const confirm = options.yes ? alwaysYes : promptYes;
@@ -47,7 +47,7 @@ async function main(): Promise<number> {
       walletAddress: wallet.getAccount().address,
       tradeId,
       sellSymbol: SELL_SYMBOL,
-      buyService,
+      buyService: swapService,
       confirm,
       print,
     });

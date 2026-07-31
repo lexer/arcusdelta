@@ -14,7 +14,7 @@ import {
   ArcusSubmissionError,
   QuoteValidationError,
 } from './errors.js';
-import {SpotBuyService, type SpotRouter} from './spotBuyService.js';
+import {SpotSwapService, type SpotRouter} from './spotSwapService.js';
 import {TokenResolver} from './tokenResolver.js';
 
 const {signQuoteMock, buildPermitMock} = vi.hoisted(() => ({
@@ -86,7 +86,7 @@ function makeWallet(): WalletProvider {
 }
 
 interface Harness {
-  service: SpotBuyService;
+  service: SpotSwapService;
   router: {
     getQuote: ReturnType<typeof vi.fn>;
     submitSignedQuote: ReturnType<typeof vi.fn>;
@@ -118,7 +118,7 @@ function harness(
   };
   const sleep = vi.fn().mockResolvedValue(undefined);
 
-  const service = new SpotBuyService({
+  const service = new SpotSwapService({
     router: router as SpotRouter,
     wallet: makeWallet(),
     tokens: new TokenResolver(
@@ -198,6 +198,87 @@ describe('executeBuy happy path', () => {
     await service.executeBuy(request);
 
     expect(router.getStatus).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('executeSell', () => {
+  /** 0.5 NVDA at 18 decimals, matching the quote fixture below. */
+  const SELL_STOCK_ATOMS = 500_000_000_000_000_000n;
+
+  function sellHarness() {
+    const h = harness();
+    h.router.getQuote.mockResolvedValue({
+      recommended: 'arcus',
+      all: [
+        makeQuote({
+          sellAmount: SELL_STOCK_ATOMS.toString(),
+          buyAmount: '99000000',
+          arcus: {minAmountOut: '98000000'},
+        }),
+      ],
+    });
+    return h;
+  }
+
+  const sellRequest = {
+    tradeId: 'sell-1',
+    sellToken: NVDA.address,
+    sellAmountAtoms: SELL_STOCK_ATOMS,
+    slippageBps: 1,
+  };
+
+  it('quotes the stock token into USDG, not the reverse', async () => {
+    const {service, router} = sellHarness();
+
+    await service.executeSell(sellRequest);
+
+    expect(router.getQuote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sellToken: NVDA.address,
+        buyToken: USDG.address,
+        sellAmount: SELL_STOCK_ATOMS.toString(),
+      }),
+    );
+  });
+
+  it('spends the exact balance it was given', async () => {
+    const {service} = sellHarness();
+
+    const result = await service.executeSell(sellRequest);
+
+    expect(result.sellAmount).toBe(SELL_STOCK_ATOMS.toString());
+    expect(result.txHash).toBe(TX_HASH);
+  });
+
+  it('runs the same permit and sign path as a buy', async () => {
+    const {service} = sellHarness();
+
+    await service.executeSell(sellRequest);
+
+    expect(buildPermitMock).toHaveBeenCalled();
+    expect(signQuoteMock).toHaveBeenCalled();
+  });
+
+  it('rejects a quote that would spend a different amount', async () => {
+    const {service, router} = sellHarness();
+    router.getQuote.mockResolvedValue({
+      recommended: 'arcus',
+      all: [makeQuote({sellAmount: '1'})],
+    });
+
+    await expect(service.executeSell(sellRequest)).rejects.toThrow(
+      QuoteValidationError,
+    );
+    expect(signQuoteMock).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a missing arcus quote', async () => {
+    const {service, router} = sellHarness();
+    router.getQuote.mockResolvedValue({recommended: 'lifi', all: []});
+
+    await expect(service.executeSell(sellRequest)).rejects.toThrow(
+      ArcusQuoteError,
+    );
   });
 });
 

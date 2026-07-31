@@ -32,7 +32,12 @@ import {
   QuoteValidationError,
 } from './errors.js';
 import type {TokenResolver} from './tokenResolver.js';
-import type {BuyRequest, BuyResult, QuotePreview} from './types.js';
+import type {
+  BuyRequest,
+  BuyResult,
+  QuotePreview,
+  SellRequest,
+} from './types.js';
 
 const POLL_INTERVAL_MS = 2_000;
 const MAX_POLL_ATTEMPTS = 30;
@@ -60,7 +65,7 @@ export type Sleep = (ms: number) => Promise<void>;
 const defaultSleep: Sleep = ms =>
   new Promise(resolve => setTimeout(resolve, ms));
 
-export interface SpotBuyServiceOptions {
+export interface SpotSwapServiceOptions {
   readonly router: SpotRouter;
   readonly wallet: WalletProvider;
   readonly tokens: TokenResolver;
@@ -71,7 +76,7 @@ export interface SpotBuyServiceOptions {
   readonly sleep?: Sleep;
 }
 
-export class SpotBuyService {
+export class SpotSwapService {
   private readonly router: SpotRouter;
   private readonly wallet: WalletProvider;
   private readonly tokens: TokenResolver;
@@ -80,7 +85,7 @@ export class SpotBuyService {
   private readonly sellSymbol: string;
   private readonly sleep: Sleep;
 
-  constructor(options: SpotBuyServiceOptions) {
+  constructor(options: SpotSwapServiceOptions) {
     this.router = options.router;
     this.wallet = options.wallet;
     this.tokens = options.tokens;
@@ -139,8 +144,58 @@ export class SpotBuyService {
     );
 
     const {quote} = await this.prepare(request, log);
+    const result = await this.settle(quote, request.tradeId, log);
 
-    const permit = await this.buildPermit(quote, request.tradeId, log);
+    log.info({...result, elapsedMs: Date.now() - startedAt}, 'buy completed');
+    return result;
+  }
+
+  /**
+   * Sells an exact atom amount of `sellToken` back into the quote currency.
+   *
+   * Takes atoms rather than a decimal string because the caller is selling a
+   * balance it read from chain, and that balance must be spent exactly.
+   */
+  async executeSell(request: SellRequest): Promise<BuyResult> {
+    const log = this.logger.child({tradeId: request.tradeId});
+    const startedAt = Date.now();
+    log.info(
+      {
+        sellToken: request.sellToken,
+        sellAmountAtoms: request.sellAmountAtoms.toString(),
+        slippageBps: request.slippageBps,
+      },
+      'sell started',
+    );
+
+    const sellToken = await this.tokens.byAddress(request.sellToken);
+    const buyToken = await this.tokens.bySymbol(this.sellSymbol);
+    const sellAmountAtoms = request.sellAmountAtoms.toString();
+
+    const quote = await this.quoteAndValidate(
+      request.tradeId,
+      sellToken,
+      buyToken,
+      sellAmountAtoms,
+      request.slippageBps,
+      log,
+    );
+    const result = await this.settle(quote, request.tradeId, log);
+
+    log.info({...result, elapsedMs: Date.now() - startedAt}, 'sell completed');
+    return result;
+  }
+
+  /**
+   * Permit, sign, submit, poll. Shared by both directions so a sell cannot
+   * diverge from the buy path that has already run live.
+   */
+  private async settle(
+    quote: ArcusFirmQuote,
+    tradeId: string,
+    log: Logger,
+  ): Promise<BuyResult> {
+    const permit = await this.buildPermit(quote, tradeId, log);
 
     log.info('signing quote');
     const signed = await signQuote(quote, this.wallet.getWalletClient(), {
@@ -148,27 +203,25 @@ export class SpotBuyService {
     });
     log.info('quote signed');
 
-    const submission = await this.submit(signed, request.tradeId, log);
+    const submission = await this.submit(signed, tradeId, log);
     const orderId =
       submission.venue === 'arcus' ? submission.orderId : undefined;
 
     await this.pollUntilTerminal(
       orderId ?? submission.txHash,
       submission.txHash,
-      request.tradeId,
+      tradeId,
       log,
     );
 
-    const result: BuyResult = {
-      tradeId: request.tradeId,
+    return {
+      tradeId,
       txHash: submission.txHash,
       orderId,
       sellAmount: quote.sellAmount,
       buyAmount: quote.buyAmount,
       minBuyAmount: quote.arcus.minAmountOut,
     };
-    log.info({...result, elapsedMs: Date.now() - startedAt}, 'buy completed');
-    return result;
   }
 
   /**
@@ -200,23 +253,45 @@ export class SpotBuyService {
       'tokens resolved',
     );
 
-    const quote = await this.fetchQuote(
-      request,
+    const quote = await this.quoteAndValidate(
+      request.tradeId,
       sellToken,
       buyToken,
       sellAmountAtoms,
+      request.slippageBps,
       log,
     );
-    this.validateQuote(quote, request.tradeId, sellAmountAtoms, log);
 
     return {quote, sellToken, buyToken};
   }
 
-  private async fetchQuote(
-    request: BuyRequest,
+  /** Direction-agnostic: fetch a quote for a pair and gate it. */
+  private async quoteAndValidate(
+    tradeId: string,
     sellToken: TokenInfo,
     buyToken: TokenInfo,
     sellAmountAtoms: string,
+    slippageBps: number,
+    log: Logger,
+  ): Promise<ArcusFirmQuote> {
+    const quote = await this.fetchQuote(
+      tradeId,
+      sellToken,
+      buyToken,
+      sellAmountAtoms,
+      slippageBps,
+      log,
+    );
+    this.validateQuote(quote, tradeId, sellAmountAtoms, log);
+    return quote;
+  }
+
+  private async fetchQuote(
+    tradeId: string,
+    sellToken: TokenInfo,
+    buyToken: TokenInfo,
+    sellAmountAtoms: string,
+    slippageBps: number,
     log: Logger,
   ): Promise<ArcusFirmQuote> {
     log.info({venue: 'arcus'}, 'requesting quote');
@@ -226,7 +301,7 @@ export class SpotBuyService {
       buyToken: buyToken.address,
       sellAmount: sellAmountAtoms,
       taker: this.wallet.getAccount().address,
-      slippageBps: request.slippageBps,
+      slippageBps,
     });
 
     const quote = response.all.find(
@@ -239,7 +314,7 @@ export class SpotBuyService {
       log.error({venueErrors}, 'no arcus quote available');
       throw new ArcusQuoteError(
         'Arcus router returned no quote for this pair',
-        request.tradeId,
+        tradeId,
         venueErrors,
       );
     }

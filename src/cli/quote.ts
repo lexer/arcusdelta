@@ -13,13 +13,13 @@ import {createContainer} from '../di/container.js';
 async function main(): Promise<number> {
   const tradeId = randomUUID();
   const config = loadConfig();
-  const {logger, wallet, buyService} = createContainer(config);
+  const {logger, wallet, swapService} = createContainer(config);
   const log = logger.child({tradeId});
 
   log.info({command: 'quote', ...loggableConfig(config)}, 'cli started');
 
   try {
-    const preview = await buyService.previewQuote({
+    const preview = await swapService.previewQuote({
       tradeId,
       buyToken: config.stockTokenAddress,
       sellAmount: config.usdgBuyAmount,

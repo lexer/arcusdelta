@@ -84,19 +84,6 @@ function harness(options: HarnessOptions = {}) {
     if (functionName === 'balanceOf') {
       return Promise.resolve(options.stockBalance ?? 0n);
     }
-    if (functionName === 'getPositionInfo') {
-      return Promise.resolve([
-        60_210_398_382_745n,
-        7_623_132_171_635_300_410_892_319_181_130n,
-        38_951_241_200_658_619_592_182_522_523_042_443_779_097n,
-      ]);
-    }
-    if (functionName === 'getFeeGrowthInside') {
-      return Promise.resolve([
-        7_685_209_671_248_051_714_120_297_456_278n,
-        39_355_508_630_248_240_174_357_965_892_606_147_015_148n,
-      ]);
-    }
     return Promise.reject(new Error(`unexpected ${functionName}`));
   });
 
@@ -132,6 +119,12 @@ function harness(options: HarnessOptions = {}) {
     positionReader: {
       discover: vi.fn().mockResolvedValue(options.positions ?? []),
       read: vi.fn(),
+    },
+    feeReader: {
+      read: vi.fn().mockResolvedValue({
+        fees0: 10_984n,
+        fees1: 71_532_072_640_175n,
+      }),
     },
     logger: pino({level: 'silent'}),
     chainId: 4663,

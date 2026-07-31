@@ -14,6 +14,7 @@
     "deposit": "tsx src/cli/deposit.ts",
     "position": "tsx src/cli/position.ts",
     "monitor": "tsx src/cli/monitor.ts",
+    "exit": "tsx src/cli/exit.ts",
     "pnl": "tsx src/cli/pnl.ts",
     "lint": "gts lint",
     "fix": "gts fix",

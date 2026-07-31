@@ -45,6 +45,7 @@ npm run quote                # what the Arcus buy would cost
 npm run position             # what liquidity position would be opened
 npm run monitor -- --dry-run # which positions are watched, and their status
 npm run pnl                  # profit and loss, including fees earned
+npm run exit -- --dry-run    # what withdrawing right now would return
 ```
 
 Neither signs, approves, nor mints. Both run the same code paths the spending commands do, then stop — so they are always safe, and they show the real numbers.
@@ -83,6 +84,25 @@ A long-running loop. Every `POOL_CHECK_INTERVAL_SECONDS` it checks whether the p
 - `--max-polls <n>` stops after a fixed number of checks.
 
 The debounce exists so a single-block wick that mean-reverts cannot trigger a close. At the defaults, a position must read out-of-range for ~90 seconds before it exits.
+
+## Exiting manually
+
+```sh
+npm run exit
+```
+
+Withdraws the liquidity, claims the accrued fees, and sells the resulting stock token back to USDG on Arcus — the same flow the monitor runs automatically when a position goes one-sided, triggered by hand.
+
+It prints principal, fees, and the guaranteed minimums, then waits for you to type `yes`:
+
+```
+  #422596  ticks [223080, 223740]
+    principal  15.014571 USDG + 0.064233316680481947 NVDA
+    fees       0.021363 USDG + 0.000072849752983344 NVDA
+    at least   14.864425 USDG + 0.063590983513677127 NVDA
+```
+
+The burn returns principal and fees together, so there is no separate claim step. `--dry-run` reports without sending, `--token-id <id>` exits one position, `--yes` skips the prompt.
 
 ## Profit and loss
 

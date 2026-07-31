@@ -42,6 +42,7 @@ graph TD
 | `npm run buy` | Buys, then deposits. Two separate confirmations. `--no-deposit` stops after the buy. |
 | `npm run deposit` | Opens a position from the balance already held. |
 | `npm run monitor` | Long-running. Closes positions that go one-sided and sells the stock token. `--dry-run` sends nothing. |
+| `npm run exit` | Withdraws liquidity, claims fees, and sells the stock token. Confirmed; `--dry-run` sends nothing. |
 | `npm run pnl` | Read-only. Profit and loss reconstructed from chain logs, including uncollected fees. |
 
 Each preview shares its code path with the command that spends — `quote` with `SpotBuyService.prepare`, `position` with `DepositService.plan` — so a preflight cannot drift from what actually executes.
@@ -76,7 +77,7 @@ Range bounds are aligned **outward** to the tick spacing, so the realized band i
 | `<= tickLower` | only USDG | the pool moved fully to USDG |
 | `>= tickUpper` | only the stock token | the pool moved fully to stock |
 
-Either way the position has stopped earning a two-sided spread and is closed. `BURN_POSITION` removes the liquidity and returns accrued fees in the same call, `TAKE_PAIR` sweeps both currencies back to the wallet, and any stock token is then sold to USDG on Arcus — so the resting state is all USDG.
+Either way the position has stopped earning a two-sided spread and is closed. `npm run exit` runs the identical path on demand: both the monitor and the manual command delegate to `PositionExitService`, so a hand-run exit cannot diverge from the automatic one. `BURN_POSITION` removes the liquidity and returns accrued fees in the same call, `TAKE_PAIR` sweeps both currencies back to the wallet, and any stock token is then sold to USDG on Arcus — so the resting state is all USDG.
 
 ```mermaid
 stateDiagram-v2

@@ -10,6 +10,7 @@ import {
   PositionMonitor,
   type PositionMonitorOptions,
 } from './positionMonitor.js';
+import {PositionExitService} from './positionExitService.js';
 import type {OwnedPosition} from './positionReader.js';
 import {getSqrtRatioAtTick} from './tickMath.js';
 
@@ -152,6 +153,25 @@ function harness(options: HarnessOptions = {}) {
     .fn()
     .mockResolvedValue({txHash: '0x5e11', buyAmount: '5000000'});
 
+  const poolKey = createPoolKey(USDG.address, NVDA.address, 3000, 60);
+  const logger = pino({level: 'silent'});
+
+  // A real exit service over fake clients, so the assertions below still
+  // exercise the code path the monitor actually takes.
+  const exitService = new PositionExitService({
+    wallet,
+    feeReader: {read: vi.fn().mockResolvedValue({fees0: 0n, fees1: 0n})},
+    swapService: {executeSell} as never,
+    logger,
+    chainId: 4663,
+    poolKey,
+    usdg: USDG,
+    stock: NVDA,
+    closeSlippageBps: 100,
+    sellSlippageBps: 1,
+    deadlineSeconds: 300,
+  });
+
   const monitorOptions: PositionMonitorOptions = {
     wallet,
     poolReader: {readState},
@@ -159,17 +179,11 @@ function harness(options: HarnessOptions = {}) {
       discover: vi.fn().mockResolvedValue(options.positions ?? [POSITION]),
       read: vi.fn().mockResolvedValue(POSITION),
     },
-    swapService: {executeSell} as never,
-    logger: pino({level: 'silent'}),
-    chainId: 4663,
-    poolKey: createPoolKey(USDG.address, NVDA.address, 3000, 60),
-    usdg: USDG,
-    stock: NVDA,
+    exitService,
+    logger,
+    poolKey,
     checkIntervalSeconds: 30,
     exitConfirmations: 3,
-    closeSlippageBps: 100,
-    sellSlippageBps: 1,
-    mintDeadlineSeconds: 300,
     dryRun: options.dryRun ?? false,
     sleep: vi.fn().mockResolvedValue(undefined),
   };

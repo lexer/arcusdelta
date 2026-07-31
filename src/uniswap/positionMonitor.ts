@@ -13,16 +13,12 @@
  */
 
 import {randomUUID} from 'node:crypto';
-import {formatUnits, type Hex} from 'viem';
-import type {SpotSwapService} from '../arcus/spotSwapService.js';
+import type {Hex} from 'viem';
 import type {WalletProvider} from '../chain/walletProvider.js';
 import type {Logger} from '../logging/logger.js';
-import {getV4Deployment} from './deployments.js';
-import type {TokenMeta} from './depositService.js';
-import {ERC20_ABI} from './permit2.js';
 import type {PoolKey} from './poolKey.js';
 import type {PoolReader} from './poolReader.js';
-import {calculateMinimums, closePosition} from './positionCloser.js';
+import type {PositionExitService} from './positionExitService.js';
 import type {OwnedPosition, PositionReader} from './positionReader.js';
 
 export type RangeStatus = 'in-range' | 'below-range' | 'above-range';
@@ -75,17 +71,11 @@ export interface PositionMonitorOptions {
   readonly wallet: WalletProvider;
   readonly poolReader: PoolReader;
   readonly positionReader: PositionReader;
-  readonly swapService: SpotSwapService;
+  readonly exitService: PositionExitService;
   readonly logger: Logger;
-  readonly chainId: number;
   readonly poolKey: PoolKey;
-  readonly usdg: TokenMeta;
-  readonly stock: TokenMeta;
   readonly checkIntervalSeconds: number;
   readonly exitConfirmations: number;
-  readonly closeSlippageBps: number;
-  readonly sellSlippageBps: number;
-  readonly mintDeadlineSeconds: number;
   /** When true, detect and report but never send a transaction. */
   readonly dryRun: boolean;
   readonly sleep?: Sleep;
@@ -209,72 +199,19 @@ export class PositionMonitor {
     return [position];
   }
 
-  /** Close the position, then sell whatever stock token it returned. */
+  /** Delegates to the shared exit service, so it matches the manual command. */
   private async exit(
     position: OwnedPosition,
     sqrtPriceX96: bigint,
     status: RangeStatus,
   ): Promise<void> {
-    const {wallet, logger, chainId, stock, poolKey} = this.options;
-    const owner = wallet.getAccount().address;
     const tradeId = randomUUID();
-    const log = logger.child({tradeId, tokenId: position.tokenId.toString()});
-
-    log.info({status}, 'exit triggered');
-
-    const {amount0Min, amount1Min} = calculateMinimums(
-      position,
-      sqrtPriceX96,
-      this.options.closeSlippageBps,
+    this.options.logger.info(
+      {tradeId, tokenId: position.tokenId.toString(), status},
+      'exit triggered',
     );
 
-    const closeResult = await closePosition(
-      {
-        publicClient: wallet.getPublicClient(),
-        walletClient: wallet.getWalletClient(),
-        positionManager: getV4Deployment(chainId).positionManager,
-        logger: log,
-      },
-      {
-        tokenId: position.tokenId,
-        poolKey,
-        amount0Min,
-        amount1Min,
-        recipient: owner,
-      },
-      this.options.mintDeadlineSeconds,
-    );
-    log.info({hash: closeResult.hash}, 'position closed');
-
-    // Sell whatever stock token the wallet now holds: principal when the pool
-    // moved up, fees alone when it moved down. Either way the resting state is
-    // all USDG.
-    const stockBalance = await wallet.getPublicClient().readContract({
-      address: stock.address,
-      abi: ERC20_ABI,
-      functionName: 'balanceOf',
-      args: [owner],
-    });
-
-    if (stockBalance === 0n) {
-      log.info('no stock token to sell after close');
-      return;
-    }
-
-    log.info(
-      {
-        stockBalance: formatUnits(stockBalance, stock.decimals),
-        symbol: stock.symbol,
-      },
-      'selling stock token on arcus',
-    );
-
-    const sale = await this.options.swapService.executeSell({
-      tradeId,
-      sellToken: stock.address,
-      sellAmountAtoms: stockBalance,
-      slippageBps: this.options.sellSlippageBps,
-    });
-    log.info({txHash: sale.txHash, buyAmount: sale.buyAmount}, 'exit complete');
+    const plan = await this.options.exitService.plan(position, sqrtPriceX96);
+    await this.options.exitService.exit(plan, tradeId);
   }
 }

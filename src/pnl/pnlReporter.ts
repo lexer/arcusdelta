@@ -15,15 +15,14 @@ import {getSwapShellTradeHistory} from '@arcus-xyz/arcus-spot-sdk';
 import {getAddress, type Hex, type PublicClient} from 'viem';
 import type {Logger} from '../logging/logger.js';
 import type {TokenMeta} from '../uniswap/depositService.js';
-import {getV4Deployment} from '../uniswap/deployments.js';
+import type {FeeReader} from '../uniswap/feeReader.js';
 import {getAmountsForLiquidity} from '../uniswap/liquidityMath.js';
 import {ERC20_ABI} from '../uniswap/permit2.js';
-import {toPoolId, type PoolKey} from '../uniswap/poolKey.js';
+import type {PoolKey} from '../uniswap/poolKey.js';
 import type {PoolReader} from '../uniswap/poolReader.js';
 import type {OwnedPosition, PositionReader} from '../uniswap/positionReader.js';
 import {getSqrtRatioAtTick} from '../uniswap/tickMath.js';
 import {
-  accruedFees,
   computePnl,
   poolPriceUsdgPerStock,
   type PnlBreakdown,
@@ -31,40 +30,6 @@ import {
 
 /** Blocks per eth_getLogs request; providers cap the range they will serve. */
 const LOG_CHUNK_BLOCKS = 50_000n;
-
-export const FEE_STATE_ABI = [
-  {
-    type: 'function',
-    name: 'getPositionInfo',
-    stateMutability: 'view',
-    inputs: [
-      {name: 'poolId', type: 'bytes32'},
-      {name: 'owner', type: 'address'},
-      {name: 'tickLower', type: 'int24'},
-      {name: 'tickUpper', type: 'int24'},
-      {name: 'salt', type: 'bytes32'},
-    ],
-    outputs: [
-      {name: 'liquidity', type: 'uint128'},
-      {name: 'feeGrowthInside0LastX128', type: 'uint256'},
-      {name: 'feeGrowthInside1LastX128', type: 'uint256'},
-    ],
-  },
-  {
-    type: 'function',
-    name: 'getFeeGrowthInside',
-    stateMutability: 'view',
-    inputs: [
-      {name: 'poolId', type: 'bytes32'},
-      {name: 'tickLower', type: 'int24'},
-      {name: 'tickUpper', type: 'int24'},
-    ],
-    outputs: [
-      {name: 'feeGrowthInside0X128', type: 'uint256'},
-      {name: 'feeGrowthInside1X128', type: 'uint256'},
-    ],
-  },
-] as const;
 
 export interface ArcusTrade {
   readonly blockNumber: bigint;
@@ -102,6 +67,7 @@ export interface PnlReporterOptions {
   readonly publicClient: PublicClient;
   readonly poolReader: PoolReader;
   readonly positionReader: PositionReader;
+  readonly feeReader: FeeReader;
   readonly logger: Logger;
   readonly chainId: number;
   readonly poolKey: PoolKey;
@@ -275,48 +241,15 @@ export class PnlReporter {
     sqrtPriceX96: bigint,
     owner: Hex,
   ): Promise<PositionValuation> {
-    const {publicClient, chainId, poolKey} = this.options;
-    const deployment = getV4Deployment(chainId);
-    const poolId = toPoolId(poolKey);
-    const salt = `0x${position.tokenId.toString(16).padStart(64, '0')}` as Hex;
-
     const {amount0, amount1} = getAmountsForLiquidity(
       sqrtPriceX96,
       getSqrtRatioAtTick(position.tickLower),
       getSqrtRatioAtTick(position.tickUpper),
       position.liquidity,
     );
-
-    // PoolManager sees PositionManager as the owner; the NFT id is the salt.
-    const [info, growth] = await Promise.all([
-      publicClient.readContract({
-        address: deployment.stateView,
-        abi: FEE_STATE_ABI,
-        functionName: 'getPositionInfo',
-        args: [
-          poolId,
-          deployment.positionManager,
-          position.tickLower,
-          position.tickUpper,
-          salt,
-        ],
-      }),
-      publicClient.readContract({
-        address: deployment.stateView,
-        abi: FEE_STATE_ABI,
-        functionName: 'getFeeGrowthInside',
-        args: [poolId, position.tickLower, position.tickUpper],
-      }),
-    ]);
-
-    const [liquidity, last0, last1] = info;
-    const [inside0, inside1] = growth;
-    const {fees0, fees1} = accruedFees(
-      BigInt(liquidity),
-      inside0,
-      inside1,
-      last0,
-      last1,
+    const {fees0, fees1} = await this.options.feeReader.read(
+      this.options.poolKey,
+      position,
     );
 
     return {

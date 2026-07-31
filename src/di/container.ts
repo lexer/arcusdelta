@@ -19,6 +19,8 @@ import {PnlReporter} from '../pnl/pnlReporter.js';
 import {DepositService} from '../uniswap/depositService.js';
 import {createPoolKey} from '../uniswap/poolKey.js';
 import {createPoolReader} from '../uniswap/poolReader.js';
+import {createFeeReader} from '../uniswap/feeReader.js';
+import {PositionExitService} from '../uniswap/positionExitService.js';
 import {PositionMonitor} from '../uniswap/positionMonitor.js';
 import {createPositionReader} from '../uniswap/positionReader.js';
 
@@ -35,6 +37,7 @@ export interface Container {
    */
   createDepositService(): Promise<DepositService>;
   createMonitor(dryRun: boolean): Promise<PositionMonitor>;
+  createExitService(): Promise<PositionExitService>;
   createPnlReporter(): Promise<PnlReporter>;
 }
 
@@ -83,24 +86,12 @@ export function createContainer(config: Config): Container {
     });
   }
 
-  async function createMonitor(dryRun: boolean): Promise<PositionMonitor> {
+  async function resolvePoolTokens() {
     const [usdgToken, stockToken] = await Promise.all([
       tokens.bySymbol(SELL_SYMBOL),
       tokens.byAddress(config.stockTokenAddress),
     ]);
-
-    return new PositionMonitor({
-      wallet,
-      poolReader: createPoolReader(wallet.getPublicClient(), config.chainId),
-      positionReader: createPositionReader(
-        wallet.getPublicClient(),
-        config.chainId,
-        config.positionLookbackBlocks,
-        logger,
-      ),
-      swapService,
-      logger,
-      chainId: config.chainId,
+    return {
       poolKey: createPoolKey(
         usdgToken.address,
         stockToken.address,
@@ -117,11 +108,44 @@ export function createContainer(config: Config): Container {
         symbol: stockToken.symbol,
         decimals: stockToken.decimals,
       },
-      checkIntervalSeconds: config.poolCheckIntervalSeconds,
-      exitConfirmations: config.exitConfirmations,
+    };
+  }
+
+  async function createExitService(): Promise<PositionExitService> {
+    const {poolKey, usdg, stock} = await resolvePoolTokens();
+
+    return new PositionExitService({
+      wallet,
+      feeReader: createFeeReader(wallet.getPublicClient(), config.chainId),
+      swapService,
+      logger,
+      chainId: config.chainId,
+      poolKey,
+      usdg,
+      stock,
       closeSlippageBps: config.closeSlippageBps,
       sellSlippageBps: config.slippageBps,
-      mintDeadlineSeconds: config.mintDeadlineSeconds,
+      deadlineSeconds: config.mintDeadlineSeconds,
+    });
+  }
+
+  async function createMonitor(dryRun: boolean): Promise<PositionMonitor> {
+    const {poolKey} = await resolvePoolTokens();
+
+    return new PositionMonitor({
+      wallet,
+      poolReader: createPoolReader(wallet.getPublicClient(), config.chainId),
+      positionReader: createPositionReader(
+        wallet.getPublicClient(),
+        config.chainId,
+        config.positionLookbackBlocks,
+        logger,
+      ),
+      exitService: await createExitService(),
+      logger,
+      poolKey,
+      checkIntervalSeconds: config.poolCheckIntervalSeconds,
+      exitConfirmations: config.exitConfirmations,
       dryRun,
     });
   }
@@ -141,6 +165,7 @@ export function createContainer(config: Config): Container {
         config.positionLookbackBlocks,
         logger,
       ),
+      feeReader: createFeeReader(wallet.getPublicClient(), config.chainId),
       logger,
       chainId: config.chainId,
       poolKey: createPoolKey(
@@ -168,6 +193,7 @@ export function createContainer(config: Config): Container {
     swapService,
     createDepositService,
     createMonitor,
+    createExitService,
     createPnlReporter,
   };
 }

@@ -1,5 +1,6 @@
 /** Inputs and outputs of an Arcus spot buy. */
 
+import type {RouteFee} from '@arcus-xyz/arcus-spot-sdk';
 import type {Hex} from 'viem';
 
 export interface BuyRequest {
@@ -11,6 +12,22 @@ export interface BuyRequest {
   readonly sellAmount: string;
   /** Slippage tolerance in basis points. 1 bps = 0.01%. */
   readonly slippageBps: number;
+}
+
+/** What a buy would do right now, in human units. Nothing is committed. */
+export interface QuotePreview {
+  readonly tradeId: string;
+  readonly venue: 'arcus';
+  readonly sellSymbol: string;
+  readonly sellAmount: string;
+  readonly buySymbol: string;
+  readonly buyAmount: string;
+  /** Guaranteed by the quote's slippage bound. */
+  readonly minBuyAmount: string;
+  /** Sell units per buy unit. Display only. */
+  readonly pricePerUnit: string;
+  readonly expiresAt: string;
+  readonly fees: readonly RouteFee[];
 }
 
 export interface BuyResult {

@@ -201,6 +201,39 @@ describe('executeBuy happy path', () => {
   });
 });
 
+describe('previewQuote', () => {
+  it('reports the trade in human units without signing', async () => {
+    const {service, router} = harness();
+
+    const preview = await service.previewQuote(request);
+
+    expect(preview).toMatchObject({
+      venue: 'arcus',
+      sellSymbol: 'USDG',
+      sellAmount: '100',
+      buySymbol: 'NVDA',
+      buyAmount: '0.5',
+      minBuyAmount: '0.499',
+      pricePerUnit: '200.0000',
+    });
+    expect(signQuoteMock).not.toHaveBeenCalled();
+    expect(router.submitSignedQuote).not.toHaveBeenCalled();
+    expect(router.getStatus).not.toHaveBeenCalled();
+  });
+
+  it('applies the same validation a buy would', async () => {
+    const {service, router} = harness();
+    router.getQuote.mockResolvedValue({
+      recommended: 'arcus',
+      all: [makeQuote({sellAmount: '999999999'})],
+    });
+
+    await expect(service.previewQuote(request)).rejects.toThrow(
+      QuoteValidationError,
+    );
+  });
+});
+
 describe('executeBuy failures before signing', () => {
   it('rejects when the router returns no arcus quote', async () => {
     const {service, router} = harness();

@@ -27,6 +27,14 @@ Fill in `.env`. `SEED` is the production wallet mnemonic and has no default; eve
 | `USDG_BUY_AMOUNT` | `100` |
 | `SLIPPAGE_BPS` | `1` (0.01%) |
 
+## Checking the price
+
+```sh
+npm run quote
+```
+
+Read-only preflight. Runs the same token resolution, quoting, and validation a buy does, then stops — nothing is signed or submitted, so it is always safe to run. Use it to see the price and guaranteed minimum before committing.
+
 ## Buying
 
 ```sh

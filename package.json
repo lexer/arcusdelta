@@ -10,6 +10,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "buy": "tsx src/cli/buy.ts",
+    "quote": "tsx src/cli/quote.ts",
     "lint": "gts lint",
     "fix": "gts fix",
     "typecheck": "tsc --noEmit",

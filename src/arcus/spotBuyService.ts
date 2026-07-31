@@ -20,7 +20,7 @@ import {
   type SubmitResponse,
   type TokenInfo,
 } from '@arcus-xyz/arcus-spot-sdk';
-import {parseUnits, type Hex} from 'viem';
+import {formatUnits, parseUnits, type Hex} from 'viem';
 import type {WalletProvider} from '../chain/walletProvider.js';
 import type {Logger} from '../logging/logger.js';
 import {
@@ -32,10 +32,20 @@ import {
   QuoteValidationError,
 } from './errors.js';
 import type {TokenResolver} from './tokenResolver.js';
-import type {BuyRequest, BuyResult} from './types.js';
+import type {BuyRequest, BuyResult, QuotePreview} from './types.js';
 
 const POLL_INTERVAL_MS = 2_000;
 const MAX_POLL_ATTEMPTS = 30;
+
+/**
+ * Human-readable unit price. Display only — float division, never used to size
+ * a trade or bound slippage, both of which stay in integer atoms.
+ */
+function divideForDisplay(numerator: string, denominator: string): string {
+  const value = Number(numerator) / Number(denominator);
+  if (!Number.isFinite(value)) return 'n/a';
+  return value.toFixed(4);
+}
 
 /** The subset of SpotRouterClient this service depends on. */
 export interface SpotRouter {
@@ -80,6 +90,42 @@ export class SpotBuyService {
     this.sleep = options.sleep ?? defaultSleep;
   }
 
+  /**
+   * Read-only preflight: resolves tokens, quotes, and validates, exactly as
+   * {@link executeBuy} does, then stops. Nothing is signed or submitted.
+   */
+  async previewQuote(request: BuyRequest): Promise<QuotePreview> {
+    const log = this.logger.child({tradeId: request.tradeId});
+    log.info(
+      {
+        buyToken: request.buyToken,
+        sellAmount: request.sellAmount,
+        slippageBps: request.slippageBps,
+      },
+      'quote preview started',
+    );
+
+    const {quote, sellToken, buyToken} = await this.prepare(request, log);
+    const buyAmount = formatUnits(BigInt(quote.buyAmount), buyToken.decimals);
+    const minBuyAmount = formatUnits(
+      BigInt(quote.arcus.minAmountOut),
+      buyToken.decimals,
+    );
+
+    return {
+      tradeId: request.tradeId,
+      venue: 'arcus',
+      sellSymbol: sellToken.symbol,
+      sellAmount: request.sellAmount,
+      buySymbol: buyToken.symbol,
+      buyAmount,
+      minBuyAmount,
+      pricePerUnit: divideForDisplay(request.sellAmount, buyAmount),
+      expiresAt: new Date(quote.expiry * 1000).toISOString(),
+      fees: quote.fees,
+    };
+  }
+
   async executeBuy(request: BuyRequest): Promise<BuyResult> {
     const log = this.logger.child({tradeId: request.tradeId});
     const startedAt = Date.now();
@@ -92,31 +138,7 @@ export class SpotBuyService {
       'buy started',
     );
 
-    const sellToken = await this.tokens.bySymbol(this.sellSymbol);
-    const buyToken = await this.tokens.byAddress(request.buyToken);
-    const sellAmountAtoms = parseUnits(
-      request.sellAmount,
-      sellToken.decimals,
-    ).toString();
-    log.info(
-      {
-        sellToken: sellToken.address,
-        sellDecimals: sellToken.decimals,
-        buyToken: buyToken.address,
-        buySymbol: buyToken.symbol,
-        sellAmountAtoms,
-      },
-      'tokens resolved',
-    );
-
-    const quote = await this.fetchQuote(
-      request,
-      sellToken,
-      buyToken,
-      sellAmountAtoms,
-      log,
-    );
-    this.validateQuote(quote, request.tradeId, sellAmountAtoms, log);
+    const {quote} = await this.prepare(request, log);
 
     const permit = await this.buildPermit(quote, request.tradeId, log);
 
@@ -147,6 +169,47 @@ export class SpotBuyService {
     };
     log.info({...result, elapsedMs: Date.now() - startedAt}, 'buy completed');
     return result;
+  }
+
+  /**
+   * Everything a buy does before it commits: resolve tokens, quote, validate.
+   * Shared with {@link previewQuote} so a preflight exercises the same path.
+   */
+  private async prepare(
+    request: BuyRequest,
+    log: Logger,
+  ): Promise<{
+    quote: ArcusFirmQuote;
+    sellToken: TokenInfo;
+    buyToken: TokenInfo;
+  }> {
+    const sellToken = await this.tokens.bySymbol(this.sellSymbol);
+    const buyToken = await this.tokens.byAddress(request.buyToken);
+    const sellAmountAtoms = parseUnits(
+      request.sellAmount,
+      sellToken.decimals,
+    ).toString();
+    log.info(
+      {
+        sellToken: sellToken.address,
+        sellDecimals: sellToken.decimals,
+        buyToken: buyToken.address,
+        buySymbol: buyToken.symbol,
+        sellAmountAtoms,
+      },
+      'tokens resolved',
+    );
+
+    const quote = await this.fetchQuote(
+      request,
+      sellToken,
+      buyToken,
+      sellAmountAtoms,
+      log,
+    );
+    this.validateQuote(quote, request.tradeId, sellAmountAtoms, log);
+
+    return {quote, sellToken, buyToken};
   }
 
   private async fetchQuote(

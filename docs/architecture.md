@@ -13,7 +13,7 @@
 | `chain/` | viem `Chain` for Robinhood Chain (4663) and the `WalletProvider` that derives the production account from `SEED`. |
 | `arcus/` | Token resolution from the router list, typed errors, and `SpotBuyService` — the quote → sign → submit → poll flow. |
 | `di/` | The single composition root. Everything else takes dependencies as constructor parameters. |
-| `cli/` | `buyCommand.ts` holds the command logic (IO-free, so the confirmation gate is testable); `buy.ts` is the thin entrypoint. |
+| `cli/` | `buyCommand.ts` holds the command logic (IO-free, so the confirmation gate is testable); `buy.ts` and `quote.ts` are thin entrypoints. |
 
 ```mermaid
 graph TD
@@ -29,6 +29,15 @@ graph TD
     Svc --> Tokens
 ```
 
+## Commands
+
+| Command | Effect |
+| --- | --- |
+| `npm run quote` | Read-only. Resolves tokens, quotes, and validates, then stops. |
+| `npm run buy` | The same steps, then permit, sign, submit, and poll — after the operator types `yes`. |
+
+Both route through `SpotBuyService.prepare`, so the preflight exercises the identical path the buy commits to.
+
 ## Buy flow
 
 ```mermaid
@@ -41,6 +50,7 @@ sequenceDiagram
     participant W as Wallet
 
     Op->>CLI: npm run buy
+    Note over CLI,SDK: npm run quote runs the same steps<br/>through validation, then stops
     CLI->>CLI: load + validate config
     CLI->>W: derive account from SEED
     CLI->>Op: print wallet, amount, token, slippage

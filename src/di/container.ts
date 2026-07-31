@@ -15,6 +15,7 @@ import type {WalletProvider} from '../chain/walletProvider.js';
 import type {Config} from '../config/config.js';
 import {createLogger} from '../logging/logger.js';
 import type {Logger} from '../logging/logger.js';
+import {PnlReporter} from '../pnl/pnlReporter.js';
 import {DepositService} from '../uniswap/depositService.js';
 import {createPoolKey} from '../uniswap/poolKey.js';
 import {createPoolReader} from '../uniswap/poolReader.js';
@@ -34,6 +35,7 @@ export interface Container {
    */
   createDepositService(): Promise<DepositService>;
   createMonitor(dryRun: boolean): Promise<PositionMonitor>;
+  createPnlReporter(): Promise<PnlReporter>;
 }
 
 export function createContainer(config: Config): Container {
@@ -124,7 +126,50 @@ export function createContainer(config: Config): Container {
     });
   }
 
-  return {logger, wallet, swapService, createDepositService, createMonitor};
+  async function createPnlReporter(): Promise<PnlReporter> {
+    const [usdgToken, stockToken] = await Promise.all([
+      tokens.bySymbol(SELL_SYMBOL),
+      tokens.byAddress(config.stockTokenAddress),
+    ]);
+
+    return new PnlReporter({
+      publicClient: wallet.getPublicClient(),
+      poolReader: createPoolReader(wallet.getPublicClient(), config.chainId),
+      positionReader: createPositionReader(
+        wallet.getPublicClient(),
+        config.chainId,
+        config.positionLookbackBlocks,
+        logger,
+      ),
+      logger,
+      chainId: config.chainId,
+      poolKey: createPoolKey(
+        usdgToken.address,
+        stockToken.address,
+        config.poolFee,
+        config.poolTickSpacing,
+      ),
+      usdg: {
+        address: usdgToken.address,
+        symbol: usdgToken.symbol,
+        decimals: usdgToken.decimals,
+      },
+      stock: {
+        address: stockToken.address,
+        symbol: stockToken.symbol,
+        decimals: stockToken.decimals,
+      },
+    });
+  }
+
+  return {
+    logger,
+    wallet,
+    swapService,
+    createDepositService,
+    createMonitor,
+    createPnlReporter,
+  };
 }
 
 export {SELL_SYMBOL};

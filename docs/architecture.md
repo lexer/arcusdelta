@@ -15,6 +15,7 @@ The Arcus buy delivers the **plain** stock token — the same one the v4 pool us
 | `chain/` | viem `Chain` for Robinhood Chain (4663) and the `WalletProvider` that derives the production account from `SEED`. |
 | `arcus/` | Token resolution from the router list, typed errors, and `SpotBuyService` — the quote → sign → submit → poll flow. |
 | `uniswap/` | v4 deployment addresses, tick and liquidity math, pool reads, range calculation, Permit2 approvals, mint encoding, and the deposit orchestration. |
+| `pnl/` | Profit and loss: pure arithmetic in `pnlCalculator.ts`, chain reconstruction in `pnlReporter.ts`. |
 | `di/` | The single composition root. Everything else takes dependencies as constructor parameters. |
 | `cli/` | `buyCommand.ts` and `depositCommand.ts` hold the command logic (IO-free, so the confirmation gates are testable); `buy.ts`, `quote.ts`, `deposit.ts`, and `position.ts` are thin entrypoints. |
 
@@ -41,6 +42,7 @@ graph TD
 | `npm run buy` | Buys, then deposits. Two separate confirmations. `--no-deposit` stops after the buy. |
 | `npm run deposit` | Opens a position from the balance already held. |
 | `npm run monitor` | Long-running. Closes positions that go one-sided and sells the stock token. `--dry-run` sends nothing. |
+| `npm run pnl` | Read-only. Profit and loss reconstructed from chain logs, including uncollected fees. |
 
 Each preview shares its code path with the command that spends — `quote` with `SpotBuyService.prepare`, `position` with `DepositService.plan` — so a preflight cannot drift from what actually executes.
 
@@ -89,6 +91,21 @@ stateDiagram-v2
 The breach counter is what stops a momentary wick from realizing a loss; it resets the instant the pool reads back in range.
 
 Discovery filters positions by **pool id**, not just the token pair, so every field of the pool key must match. The wallet holds position NFTs from unrelated pools, and this is what keeps them out of reach of the closer.
+
+## Profit and loss
+
+```
+net = sells + open value + uncollected fees − (purchases + USDG deposited)
+```
+
+Two properties make this trustworthy:
+
+- **No local ledger.** Everything is reconstructed from chain logs, so the report cannot drift when the wallet is used outside the bot — which has happened.
+- **Deposits count as capital.** A position is funded partly by the stock bought on Arcus and partly by USDG taken straight from the wallet. Only the first passes through a trade. Counting the position's full value as a gain while counting only the Arcus spend as capital invents profit equal to the USDG side of the deposit. The deposited amount is recovered from the mint transaction's ERC20 `Transfer` logs, and a test pins the failure mode.
+
+Uncollected fees come from `liquidity × Δ feeGrowthInside / 2^128`, read live from StateView with PositionManager as owner and the NFT id as salt.
+
+Limitation: the RPC serves historical *state* only ~1000 blocks back, so fees cannot be split from principal for positions that closed long ago. Realized PnL is unaffected, since it comes from logs.
 
 ## Buy flow
 

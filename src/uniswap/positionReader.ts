@@ -61,6 +61,12 @@ export interface OwnedPosition {
   readonly tickLower: number;
   readonly tickUpper: number;
   readonly liquidity: bigint;
+  /**
+   * Transaction that transferred this position to the owner, when discovery
+   * found it via logs. PnL needs it to recover what was actually deposited —
+   * the USDG side comes from the wallet, not from an Arcus trade.
+   */
+  readonly mintTxHash?: Hex;
 }
 
 /**
@@ -87,6 +93,7 @@ export interface PositionReader {
     tokenId: bigint,
     key: PoolKey,
     owner: Hex,
+    mintTxHash?: Hex,
   ): Promise<OwnedPosition | undefined>;
 }
 
@@ -102,6 +109,7 @@ export function createPositionReader(
     tokenId: bigint,
     key: PoolKey,
     owner: Hex,
+    mintTxHash?: Hex,
   ): Promise<OwnedPosition | undefined> {
     const expectedPoolId = toPoolId(key);
     try {
@@ -134,7 +142,13 @@ export function createPositionReader(
       if (toPoolId(poolKey as PoolKey) !== expectedPoolId) return undefined;
 
       const {tickLower, tickUpper} = decodePositionTicks(info);
-      return {tokenId, tickLower, tickUpper, liquidity};
+      return {
+        tokenId,
+        tickLower,
+        tickUpper,
+        liquidity,
+        ...(mintTxHash ? {mintTxHash} : {}),
+      };
     } catch (error) {
       // A burned token reverts on ownerOf; that is a normal outcome here.
       logger.debug(
@@ -163,7 +177,7 @@ export function createPositionReader(
         'discovering positions',
       );
 
-      const candidates = new Set<bigint>();
+      const candidates = new Map<bigint, Hex | undefined>();
       for (let end = latest; end > earliest; end -= LOG_CHUNK_BLOCKS) {
         const start =
           end > earliest + LOG_CHUNK_BLOCKS ? end - LOG_CHUNK_BLOCKS : earliest;
@@ -176,7 +190,8 @@ export function createPositionReader(
             toBlock: end,
           });
           for (const entry of logs) {
-            if (entry.args.id !== undefined) candidates.add(entry.args.id);
+            if (entry.args.id === undefined) continue;
+            candidates.set(entry.args.id, entry.transactionHash ?? undefined);
           }
         } catch (error) {
           logger.warn(
@@ -191,8 +206,8 @@ export function createPositionReader(
       }
 
       const positions: OwnedPosition[] = [];
-      for (const tokenId of candidates) {
-        const position = await read(tokenId, key, owner);
+      for (const [tokenId, mintTxHash] of candidates) {
+        const position = await read(tokenId, key, owner, mintTxHash);
         if (position) positions.push(position);
       }
       positions.sort((a, b) => (a.tokenId < b.tokenId ? -1 : 1));

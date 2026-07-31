@@ -44,6 +44,7 @@ Fill in `.env`. `SEED` is the production wallet mnemonic and has no default; eve
 npm run quote                # what the Arcus buy would cost
 npm run position             # what liquidity position would be opened
 npm run monitor -- --dry-run # which positions are watched, and their status
+npm run pnl                  # profit and loss, including fees earned
 ```
 
 Neither signs, approves, nor mints. Both run the same code paths the spending commands do, then stop — so they are always safe, and they show the real numbers.
@@ -82,6 +83,26 @@ A long-running loop. Every `POOL_CHECK_INTERVAL_SECONDS` it checks whether the p
 - `--max-polls <n>` stops after a fixed number of checks.
 
 The debounce exists so a single-block wick that mean-reverts cannot trigger a close. At the defaults, a position must read out-of-range for ~90 seconds before it exits.
+
+## Profit and loss
+
+```sh
+npm run pnl
+```
+
+Reconstructs every Arcus fill and open position from chain logs — there is no local ledger, so nothing can drift if you also trade manually. Uncollected pool fees are read live from `feeGrowthInside`.
+
+```
+capital in   42.6845 USDG  (NVDA purchases + USDG deposited)
+capital out  14.9895 USDG  (NVDA sold back)
+still open   27.7126 USDG  (position principal + loose NVDA)
+fees earned  +0.0273 USDG
+net          +0.0449 USDG  (+0.11%)
+```
+
+Capital in counts **both** the Arcus purchases and the USDG taken from the wallet to fund a deposit — the latter never passes through a trade, and omitting it invents profit equal to that amount. Net marks open value at the pool price, so it moves with the market until the position is closed.
+
+`--from-block <n>` narrows the scan; the default walks all history and is slower.
 
 ## Development
 

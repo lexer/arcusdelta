@@ -1,6 +1,6 @@
 # 0001 — Arcus spot buy CLI
 
-Status: in progress
+Status: implemented — not yet run live
 
 ## Context
 
@@ -106,10 +106,12 @@ pino, with a `tradeId` child logger on every line. Points: CLI start; config loa
 - Buy service: happy path; no arcus quote; quote validation failures (sellAmount mismatch, expired) assert **sign and submit were never called**; permit unsupported → `ArcusPermitError` with nothing signed; submission failure; `failed` status; poll timeout terminates rather than looping forever.
 - CLI: the confirmation gate blocks execution unless the operator types `yes` — asserts `executeBuy` was never called. This is the most important test in the feature.
 
-## Open items
+## Resolved during implementation
 
-- Robinhood Chain native currency symbol/decimals and explorer URL are unverified; current values are best-effort and affect only fee display, not the ERC-20 swap.
-- USDG must appear in the router's token list under symbol `USDG`. Verify with a read-only `getTokenList()` call against mainnet before the first live run.
+- Robinhood Chain metadata: viem ships a verified `robinhood` chain (4663, ETH 18 decimals, Blockscout explorer, multicall3). We use it and only override the RPC URL, so nothing was guessed.
+- Token list verified read-only against mainnet: `USDG` = `0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168` (6 decimals), `NVDA` = the configured address (18 decimals). 100 USDG is therefore `100000000` atoms.
+- The status poll is bounded by attempt count (30 × 2s) rather than wall clock. A wall-clock bound could not terminate when the sleep was stubbed, which the timeout test caught.
+- Slippage is enforced by the router's `minAmountOut`, so the service validates the returned quote (sell amount matches, minimum output positive, not expired) instead of re-deriving slippage against a reference price.
 
 ## Verification
 

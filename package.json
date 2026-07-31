@@ -1,0 +1,33 @@
+{
+  "name": "arcusamm",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Automated market-making bot for tokenized stocks on Arcus Spot and Robinhood Chain",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "buy": "tsx src/cli/buy.ts",
+    "lint": "gts lint",
+    "fix": "gts fix",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@arcus-xyz/arcus-spot-sdk": "^1.0.2",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.5",
+    "pino": "^9.5.0",
+    "viem": "^2.21.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "gts": "^6.0.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.5"
+  }
+}

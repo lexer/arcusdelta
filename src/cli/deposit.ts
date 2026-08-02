@@ -1,6 +1,7 @@
 /**
- * Entrypoint for `npm run deposit` — open a Uniswap v4 position from the
- * stock-token balance the wallet already holds.
+ * Entrypoint for `npm run deposit` — open a Uniswap v3 position from the
+ * stock-token balance the wallet already holds, for every configured symbol
+ * (or just `--symbol`).
  *
  * Exists alongside the chained `buy` flow so a balance acquired earlier is
  * never stranded. `--yes` skips the confirmation.
@@ -10,36 +11,54 @@ import {randomUUID} from 'node:crypto';
 import {Command} from 'commander';
 import {loadConfig, loggableConfig} from '../config/config.js';
 import {createContainer} from '../di/container.js';
-import {runDepositCommand} from './depositCommand.js';
+import {runDepositCommand, type DepositRequestItem} from './depositCommand.js';
 import {alwaysYes, print, promptYes} from './prompt.js';
+import {loadSelectedSymbols} from './symbolSelection.js';
 
 async function main(): Promise<number> {
   const program = new Command()
     .name('deposit')
-    .description('Open a Uniswap v4 position from the wallet stock balance')
+    .description('Open Uniswap v3 positions from the wallet stock balances')
     .option('-y, --yes', 'skip the interactive confirmation')
+    .option('--symbol <ticker>', 'act on only this configured symbol')
     .parse(process.argv);
-  const options = program.opts<{yes?: boolean}>();
+  const options = program.opts<{yes?: boolean; symbol?: string}>();
 
-  const tradeId = randomUUID();
   const config = loadConfig();
+  const symbols = loadSelectedSymbols(config, options.symbol);
   const container = createContainer(config);
-  const log = container.logger.child({tradeId});
+  const log = container.logger.child({tradeId: randomUUID()});
   const startedAt = Date.now();
 
-  log.info({command: 'deposit', ...loggableConfig(config)}, 'cli started');
+  log.info(
+    {
+      command: 'deposit',
+      symbols: symbols.map(s => s.symbol),
+      ...loggableConfig(config),
+    },
+    'cli started',
+  );
   log.info(
     {walletAddress: container.wallet.getAccount().address},
     'wallet derived',
   );
 
   try {
-    const depositService = await container.createDepositService();
+    const items: DepositRequestItem[] = await Promise.all(
+      symbols.map(async s => {
+        const depositService = await container.createDepositService(s);
+        return {
+          symbol: s.symbol,
+          usdg: depositService.tokens.usdg,
+          stock: depositService.tokens.stock,
+          rangeDeviationPercent: s.rangeDeviationPercent,
+          depositService,
+        };
+      }),
+    );
+
     const result = await runDepositCommand({
-      usdg: depositService.tokens.usdg,
-      stock: depositService.tokens.stock,
-      rangeDeviationPercent: config.rangeDeviationPercent,
-      depositService,
+      items,
       confirm: options.yes ? alwaysYes : promptYes,
       print,
     });

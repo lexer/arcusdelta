@@ -1,5 +1,6 @@
 /**
- * Entrypoint for `npm run pnl` — a read-only profit and loss report.
+ * Entrypoint for `npm run pnl` — a read-only profit and loss report, per
+ * configured symbol (or just `--symbol`).
  *
  * Reconstructs everything from chain logs and current pool state. Sends
  * nothing and needs no local ledger.
@@ -11,12 +12,14 @@ import {loadConfig, loggableConfig} from '../config/config.js';
 import {createContainer} from '../di/container.js';
 import type {PnlReport} from '../pnl/pnlReporter.js';
 import {print} from './prompt.js';
+import {loadSelectedSymbols} from './symbolSelection.js';
 
 function signed(value: number, digits = 4): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(digits)}`;
 }
 
 function render(
+  symbol: string,
   report: PnlReport,
   usdgSymbol: string,
   stockSymbol: string,
@@ -26,6 +29,7 @@ function render(
   const {breakdown} = report;
 
   print('');
+  print(`  ${symbol}`);
   print(`  wallet       ${report.walletAddress}`);
   print(
     `  pool price   ${report.priceUsdgPerStock.toFixed(4)} ${usdgSymbol} per ${stockSymbol} (tick ${report.poolTick})`,
@@ -98,35 +102,59 @@ async function main(): Promise<number> {
     .name('pnl')
     .description('Report profit and loss, including fees earned')
     .option('--from-block <n>', 'start scanning at this block', '0')
+    .option('--symbol <ticker>', 'report only this configured symbol')
     .parse(process.argv);
-  const options = program.opts<{fromBlock: string}>();
+  const options = program.opts<{fromBlock: string; symbol?: string}>();
 
   const config = loadConfig();
+  const symbols = loadSelectedSymbols(config, options.symbol);
   const container = createContainer(config);
   const {logger, wallet} = container;
 
-  logger.info({command: 'pnl', ...loggableConfig(config)}, 'cli started');
+  logger.info(
+    {
+      command: 'pnl',
+      symbols: symbols.map(s => s.symbol),
+      ...loggableConfig(config),
+    },
+    'cli started',
+  );
 
-  try {
-    const reporter = await container.createPnlReporter();
-    const report = await reporter.report(
-      wallet.getAccount().address,
-      BigInt(options.fromBlock),
-    );
+  let failures = 0;
+  for (const s of symbols) {
+    try {
+      const reporter = await container.createPnlReporter(s);
+      const report = await reporter.report(
+        wallet.getAccount().address,
+        BigInt(options.fromBlock),
+      );
 
-    const {usdg, stock} = await container
-      .createDepositService()
-      .then(s => s.tokens);
-    render(report, usdg.symbol, stock.symbol, stock.decimals, usdg.decimals);
+      const {usdg, stock} = await container
+        .createDepositService(s)
+        .then(d => d.tokens);
+      render(
+        s.symbol,
+        report,
+        usdg.symbol,
+        stock.symbol,
+        stock.decimals,
+        usdg.decimals,
+      );
 
-    logger.info({netUsdg: report.breakdown.netUsdg}, 'cli finished');
-    return 0;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.error({error: message}, 'cli failed');
-    process.stderr.write(`${message}\n`);
-    return 1;
+      logger.info(
+        {symbol: s.symbol, netUsdg: report.breakdown.netUsdg},
+        'symbol reported',
+      );
+    } catch (error) {
+      failures++;
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error({symbol: s.symbol, error: message}, 'symbol report failed');
+      process.stderr.write(`${s.symbol}: ${message}\n`);
+    }
   }
+
+  logger.info({failures, total: symbols.length}, 'cli finished');
+  return failures === symbols.length && symbols.length > 0 ? 1 : 0;
 }
 
 process.exitCode = await main();

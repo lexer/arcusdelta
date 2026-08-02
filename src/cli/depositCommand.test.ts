@@ -4,6 +4,7 @@ import {
   buildDepositSummary,
   runDepositCommand,
   type DepositCommandDeps,
+  type DepositRequestItem,
 } from './depositCommand.js';
 
 const USDG: TokenMeta = {
@@ -18,7 +19,13 @@ const NVDA: TokenMeta = {
   decimals: 18,
 };
 
-const plan: DepositPlan = {
+const AAPL: TokenMeta = {
+  address: '0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9',
+  symbol: 'AAPL',
+  decimals: 18,
+};
+
+const nvdaPlan: DepositPlan = {
   pool: {
     token0: USDG.address,
     token1: NVDA.address,
@@ -39,9 +46,24 @@ const plan: DepositPlan = {
   usdgBalance: 1_000_000_000n,
 };
 
-function deps(
-  overrides: Partial<DepositCommandDeps> = {},
-): DepositCommandDeps & {
+const aaplPlan: DepositPlan = {
+  ...nvdaPlan,
+  pool: {
+    ...nvdaPlan.pool,
+    token1: AAPL.address,
+    address: '0x783C9bbB765047CFdD2b84b92b2Ca9F11D34b7Ed',
+  },
+  currentTick: 218900,
+  tickLower: 218700,
+  tickUpper: 219100,
+};
+
+function makeItem(
+  symbol: string,
+  stock: TokenMeta,
+  plan: DepositPlan,
+  overrides: Partial<DepositRequestItem> = {},
+): DepositRequestItem & {
   planFn: ReturnType<typeof vi.fn>;
   executeFn: ReturnType<typeof vi.fn>;
 } {
@@ -55,69 +77,175 @@ function deps(
   });
 
   return {
+    symbol,
     usdg: USDG,
-    stock: NVDA,
+    stock,
     rangeDeviationPercent: 3,
     depositService: {plan: planFn, execute: executeFn},
-    confirm: vi.fn().mockResolvedValue(true),
-    print: vi.fn(),
     planFn,
     executeFn,
     ...overrides,
   };
 }
 
+function deps(overrides: Partial<DepositCommandDeps> = {}): DepositCommandDeps {
+  return {
+    items: [makeItem('NVDA', NVDA, nvdaPlan)],
+    confirm: vi.fn().mockResolvedValue(true),
+    print: vi.fn(),
+    ...overrides,
+  };
+}
+
 describe('confirmation gate', () => {
   it('opens no position when the operator declines', async () => {
-    const subject = deps({confirm: vi.fn().mockResolvedValue(false)});
+    const item = makeItem('NVDA', NVDA, nvdaPlan);
+    const subject = deps({
+      items: [item],
+      confirm: vi.fn().mockResolvedValue(false),
+    });
 
     const result = await runDepositCommand(subject);
 
     expect(result).toBeUndefined();
-    expect(subject.executeFn).not.toHaveBeenCalled();
+    expect(item.executeFn).not.toHaveBeenCalled();
   });
 
-  it('plans before asking, so the operator sees real numbers', async () => {
-    const subject = deps({confirm: vi.fn().mockResolvedValue(false)});
+  it('plans every symbol before asking, so the operator sees real numbers', async () => {
+    const nvda = makeItem('NVDA', NVDA, nvdaPlan);
+    const aapl = makeItem('AAPL', AAPL, aaplPlan);
+    const subject = deps({
+      items: [nvda, aapl],
+      confirm: vi.fn().mockResolvedValue(false),
+    });
 
     await runDepositCommand(subject);
 
-    expect(subject.planFn).toHaveBeenCalledOnce();
+    expect(nvda.planFn).toHaveBeenCalledOnce();
+    expect(aapl.planFn).toHaveBeenCalledOnce();
   });
 
-  it('executes the very plan that was shown', async () => {
-    const subject = deps();
+  it('executes every symbol after one combined approval', async () => {
+    const nvda = makeItem('NVDA', NVDA, nvdaPlan);
+    const aapl = makeItem('AAPL', AAPL, aaplPlan);
+    const confirm = vi.fn().mockResolvedValue(true);
+    const subject = deps({items: [nvda, aapl], confirm});
 
-    const result = await runDepositCommand(subject);
+    const outcomes = await runDepositCommand(subject);
 
-    expect(subject.executeFn).toHaveBeenCalledWith(plan);
-    expect(result?.hash).toBe('0xfeed');
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(nvda.executeFn).toHaveBeenCalledWith(nvdaPlan);
+    expect(aapl.executeFn).toHaveBeenCalledWith(aaplPlan);
+    expect(outcomes).toHaveLength(2);
+  });
+
+  it('reports no-op when nothing is selected', async () => {
+    const subject = deps({items: []});
+
+    const outcomes = await runDepositCommand(subject);
+
+    expect(outcomes).toEqual([]);
+    expect(subject.confirm).not.toHaveBeenCalled();
+  });
+});
+
+describe('partial failure', () => {
+  it('skips planning symbols that fail, but still confirms and executes the rest', async () => {
+    const failing = makeItem('NVDA', NVDA, nvdaPlan, {
+      depositService: {
+        plan: vi.fn().mockRejectedValue(new Error('no stock balance')),
+        execute: vi.fn(),
+      },
+    });
+    const ok = makeItem('AAPL', AAPL, aaplPlan);
+    const confirm = vi.fn().mockResolvedValue(true);
+    const subject = deps({items: [failing, ok], confirm});
+
+    const outcomes = await runDepositCommand(subject);
+
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(ok.executeFn).toHaveBeenCalledWith(aaplPlan);
+    expect(outcomes).toContainEqual(
+      expect.objectContaining({symbol: 'NVDA', error: 'no stock balance'}),
+    );
+    expect(outcomes).toContainEqual(expect.objectContaining({symbol: 'AAPL'}));
+  });
+
+  it('never confirms when every symbol fails to plan', async () => {
+    const failing = makeItem('NVDA', NVDA, nvdaPlan, {
+      depositService: {
+        plan: vi.fn().mockRejectedValue(new Error('no stock balance')),
+        execute: vi.fn(),
+      },
+    });
+    const confirm = vi.fn();
+    const subject = deps({items: [failing], confirm});
+
+    const outcomes = await runDepositCommand(subject);
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(outcomes).toEqual([{symbol: 'NVDA', error: 'no stock balance'}]);
+  });
+
+  it('continues past one execution failure and reports both outcomes', async () => {
+    const failing = makeItem('NVDA', NVDA, nvdaPlan, {
+      depositService: {
+        plan: vi.fn().mockResolvedValue(nvdaPlan),
+        execute: vi.fn().mockRejectedValue(new Error('mint reverted: STF')),
+      },
+    });
+    const ok = makeItem('AAPL', AAPL, aaplPlan);
+    const subject = deps({items: [failing, ok]});
+
+    const outcomes = await runDepositCommand(subject);
+
+    expect(outcomes).toContainEqual(
+      expect.objectContaining({symbol: 'NVDA', error: 'mint reverted: STF'}),
+    );
+    expect(outcomes).toContainEqual(expect.objectContaining({symbol: 'AAPL'}));
   });
 });
 
 describe('buildDepositSummary', () => {
-  it('states both deposit legs and the range', () => {
-    const summary = buildDepositSummary(plan, deps());
+  it('states every symbols deposit legs and range', () => {
+    const summary = buildDepositSummary([
+      {item: makeItem('NVDA', NVDA, nvdaPlan), plan: nvdaPlan},
+      {item: makeItem('AAPL', AAPL, aaplPlan), plan: aaplPlan},
+    ]);
 
+    expect(summary).toContain('NVDA');
     expect(summary).toContain('0.025178400616157272 NVDA');
-    expect(summary).toContain('5 USDG');
+    expect(summary).toContain('AAPL');
     expect(summary).toContain('223140');
     expect(summary).toContain('223740');
     expect(summary).toContain('±3%');
     expect(summary).toContain('PRODUCTION');
   });
 
-  it('shows a price band that brackets the pool price', () => {
-    const summary = buildDepositSummary(plan, deps());
+  it('shows a price band that brackets each pools price', () => {
+    const summary = buildDepositSummary([
+      {item: makeItem('NVDA', NVDA, nvdaPlan), plan: nvdaPlan},
+    ]);
 
     // ~198 USDG per NVDA at tick 223440, +/-3%.
     expect(summary).toMatch(/19[0-9]\.\d{4} USDG per NVDA/);
   });
 
-  it('discloses the maximum it may pull', () => {
-    const summary = buildDepositSummary(plan, deps());
+  it('discloses the maximum each may pull', () => {
+    const summary = buildDepositSummary([
+      {item: makeItem('NVDA', NVDA, nvdaPlan), plan: nvdaPlan},
+    ]);
 
     expect(summary).toContain('max pull');
     expect(summary).toContain('5.025 USDG');
+  });
+
+  it('pluralizes correctly for a single position', () => {
+    const summary = buildDepositSummary([
+      {item: makeItem('NVDA', NVDA, nvdaPlan), plan: nvdaPlan},
+    ]);
+
+    expect(summary).toContain('1 Uniswap v3 liquidity position');
+    expect(summary).not.toContain('1 Uniswap v3 liquidity positions');
   });
 });

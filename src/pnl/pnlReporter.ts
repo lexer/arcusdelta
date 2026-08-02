@@ -12,13 +12,14 @@
  */
 
 import {getSwapShellTradeHistory} from '@arcus-xyz/arcus-spot-sdk';
-import {getAddress, type Hex, type PublicClient} from 'viem';
+import {getAddress, parseAbiItem, type Hex, type PublicClient} from 'viem';
 import type {Logger} from '../logging/logger.js';
 import type {TokenMeta} from '../uniswap/depositService.js';
+import {getV3Deployment} from '../uniswap/deployments.js';
+import {ERC20_ABI} from '../uniswap/erc20.js';
 import type {FeeReader} from '../uniswap/feeReader.js';
 import {getAmountsForLiquidity} from '../uniswap/liquidityMath.js';
-import {ERC20_ABI} from '../uniswap/permit2.js';
-import type {PoolKey} from '../uniswap/poolKey.js';
+import {isToken0, type PoolIdentity} from '../uniswap/poolAddress.js';
 import type {PoolReader} from '../uniswap/poolReader.js';
 import type {OwnedPosition, PositionReader} from '../uniswap/positionReader.js';
 import {getSqrtRatioAtTick} from '../uniswap/tickMath.js';
@@ -30,6 +31,10 @@ import {
 
 /** Blocks per eth_getLogs request; providers cap the range they will serve. */
 const LOG_CHUNK_BLOCKS = 50_000n;
+
+const INCREASE_LIQUIDITY_EVENT = parseAbiItem(
+  'event IncreaseLiquidity(uint256 indexed tokenId, uint128 liquidity, uint256 amount0, uint256 amount1)',
+);
 
 export interface ArcusTrade {
   readonly blockNumber: bigint;
@@ -47,7 +52,7 @@ export interface PositionValuation {
   readonly principalStock: bigint;
   readonly fees0: bigint;
   readonly fees1: bigint;
-  /** USDG taken from the wallet to fund this position, from the mint receipt. */
+  /** USDG taken from the wallet to fund this position, from its mint event. */
   readonly depositedUsdg: bigint;
 }
 
@@ -70,7 +75,7 @@ export interface PnlReporterOptions {
   readonly feeReader: FeeReader;
   readonly logger: Logger;
   readonly chainId: number;
-  readonly poolKey: PoolKey;
+  readonly pool: PoolIdentity;
   readonly usdg: TokenMeta;
   readonly stock: TokenMeta;
 }
@@ -79,7 +84,7 @@ export class PnlReporter {
   constructor(private readonly options: PnlReporterOptions) {}
 
   async report(owner: Hex, fromBlock: bigint): Promise<PnlReport> {
-    const {publicClient, poolReader, positionReader, logger, poolKey} =
+    const {publicClient, poolReader, positionReader, logger, pool} =
       this.options;
 
     const toBlock = await publicClient.getBlockNumber();
@@ -90,8 +95,8 @@ export class PnlReporter {
 
     const [trades, poolState, positions, stockBalance] = await Promise.all([
       this.loadTrades(owner, fromBlock, toBlock),
-      poolReader.readState(poolKey),
-      positionReader.discover(poolKey, owner),
+      poolReader.readState(pool),
+      positionReader.discover(pool, owner),
       publicClient.readContract({
         address: this.options.stock.address,
         abi: ERC20_ABI,
@@ -108,7 +113,12 @@ export class PnlReporter {
 
     const valuations = await Promise.all(
       positions.map(position =>
-        this.valuePosition(position, poolState.sqrtPriceX96, owner),
+        this.valuePosition(
+          position,
+          poolState.sqrtPriceX96,
+          fromBlock,
+          toBlock,
+        ),
       ),
     );
 
@@ -171,64 +181,87 @@ export class PnlReporter {
     };
   }
 
-  /** Arcus fills between USDG and the stock token, in either direction. */
-  private async loadTrades(
-    owner: Hex,
+  /**
+   * Runs `fetch` over `[fromBlock, toBlock]` in bounded chunks, retrying each
+   * chunk a few times and skipping (with a warning) one that never succeeds.
+   * Shared by the Arcus trade scan and the per-position mint-event lookup.
+   */
+  private async scanChunked<T>(
     fromBlock: bigint,
     toBlock: bigint,
-  ): Promise<ArcusTrade[]> {
-    const {publicClient, logger, usdg, stock} = this.options;
-    const trades: ArcusTrade[] = [];
+    fetch: (start: bigint, end: bigint) => Promise<T[]>,
+    describe: string,
+  ): Promise<T[]> {
+    const {logger} = this.options;
+    const results: T[] = [];
 
     for (let end = toBlock; end > fromBlock; end -= LOG_CHUNK_BLOCKS) {
       const start =
         end > fromBlock + LOG_CHUNK_BLOCKS ? end - LOG_CHUNK_BLOCKS : fromBlock;
-      let logs;
       try {
-        logs = await getSwapShellTradeHistory({
-          publicClient,
-          chainId: this.options.chainId,
-          taker: owner,
-          fromBlock: start,
-          toBlock: end,
-        });
+        results.push(...(await fetch(start, end)));
       } catch (error) {
         logger.warn(
           {
             fromBlock: start.toString(),
             toBlock: end.toString(),
             error: String(error),
+            scan: describe,
           },
-          'trade log range rejected, skipping chunk',
+          'log range rejected, skipping chunk',
         );
-        continue;
       }
+    }
+    return results;
+  }
 
-      for (const entry of logs) {
-        if (!entry.args.success) continue;
-        const tokenIn = getAddress(entry.args.tokenIn);
-        const tokenOut = getAddress(entry.args.tokenOut);
+  /** Arcus fills between USDG and the stock token, in either direction. */
+  private async loadTrades(
+    owner: Hex,
+    fromBlock: bigint,
+    toBlock: bigint,
+  ): Promise<ArcusTrade[]> {
+    const {publicClient, usdg, stock} = this.options;
 
-        const isBuy = tokenIn === usdg.address && tokenOut === stock.address;
-        const isSell = tokenIn === stock.address && tokenOut === usdg.address;
-        if (!isBuy && !isSell) continue;
+    const entries = await this.scanChunked(
+      fromBlock,
+      toBlock,
+      (start, end) =>
+        getSwapShellTradeHistory({
+          publicClient,
+          chainId: this.options.chainId,
+          taker: owner,
+          fromBlock: start,
+          toBlock: end,
+        }),
+      'arcus trades',
+    );
 
-        const usdgAtoms = isBuy ? entry.args.amountIn : entry.args.amountOut;
-        const stockAtoms = isBuy ? entry.args.amountOut : entry.args.amountIn;
-        const stockWhole = Number(stockAtoms) / 10 ** stock.decimals;
+    const trades: ArcusTrade[] = [];
+    for (const entry of entries) {
+      if (!entry.args.success) continue;
+      const tokenIn = getAddress(entry.args.tokenIn);
+      const tokenOut = getAddress(entry.args.tokenOut);
 
-        trades.push({
-          blockNumber: entry.blockNumber ?? 0n,
-          txHash: entry.transactionHash ?? '0x',
-          direction: isBuy ? 'buy' : 'sell',
-          usdgAtoms,
-          stockAtoms,
-          price:
-            stockWhole === 0
-              ? 0
-              : Number(usdgAtoms) / 10 ** usdg.decimals / stockWhole,
-        });
-      }
+      const isBuy = tokenIn === usdg.address && tokenOut === stock.address;
+      const isSell = tokenIn === stock.address && tokenOut === usdg.address;
+      if (!isBuy && !isSell) continue;
+
+      const usdgAtoms = isBuy ? entry.args.amountIn : entry.args.amountOut;
+      const stockAtoms = isBuy ? entry.args.amountOut : entry.args.amountIn;
+      const stockWhole = Number(stockAtoms) / 10 ** stock.decimals;
+
+      trades.push({
+        blockNumber: entry.blockNumber ?? 0n,
+        txHash: entry.transactionHash ?? '0x',
+        direction: isBuy ? 'buy' : 'sell',
+        usdgAtoms,
+        stockAtoms,
+        price:
+          stockWhole === 0
+            ? 0
+            : Number(usdgAtoms) / 10 ** usdg.decimals / stockWhole,
+      });
     }
 
     trades.sort((a, b) => (a.blockNumber < b.blockNumber ? -1 : 1));
@@ -239,7 +272,8 @@ export class PnlReporter {
   private async valuePosition(
     position: OwnedPosition,
     sqrtPriceX96: bigint,
-    owner: Hex,
+    fromBlock: bigint,
+    toBlock: bigint,
   ): Promise<PositionValuation> {
     const {amount0, amount1} = getAmountsForLiquidity(
       sqrtPriceX96,
@@ -248,7 +282,7 @@ export class PnlReporter {
       position.liquidity,
     );
     const {fees0, fees1} = await this.options.feeReader.read(
-      this.options.poolKey,
+      this.options.pool,
       position,
     );
 
@@ -258,66 +292,63 @@ export class PnlReporter {
       principalStock: amount1,
       fees0,
       fees1,
-      depositedUsdg: await this.readDepositedUsdg(position, owner),
+      depositedUsdg: await this.readDepositedUsdg(position, fromBlock, toBlock),
     };
   }
 
   /**
-   * USDG the wallet paid into a position, summed from the mint transaction's
-   * ERC20 transfers.
+   * USDG the wallet paid into a position, read from its mint's
+   * `IncreaseLiquidity` event — the first one ever emitted for this tokenId.
    *
    * Without this the position's USDG side looks like profit from nowhere: it
    * comes straight from the wallet and never appears in an Arcus trade.
    */
   private async readDepositedUsdg(
     position: OwnedPosition,
-    owner: Hex,
+    fromBlock: bigint,
+    toBlock: bigint,
   ): Promise<bigint> {
-    const {publicClient, logger, usdg} = this.options;
-    if (!position.mintTxHash) {
+    const {logger, chainId, pool} = this.options;
+    const positionManager = getV3Deployment(chainId).positionManager;
+
+    const logs = await this.scanChunked(
+      fromBlock,
+      toBlock,
+      (start, end) =>
+        this.options.publicClient.getLogs({
+          address: positionManager,
+          event: INCREASE_LIQUIDITY_EVENT,
+          args: {tokenId: position.tokenId},
+          fromBlock: start,
+          toBlock: end,
+        }),
+      `mint event for token ${position.tokenId}`,
+    );
+
+    if (logs.length === 0) {
       logger.warn(
         {tokenId: position.tokenId.toString()},
-        'no mint transaction known; deposited USDG will be understated',
+        'no mint event found in the scanned range; deposited USDG will be understated',
       );
       return 0n;
     }
 
-    try {
-      const receipt = await publicClient.getTransactionReceipt({
-        hash: position.mintTxHash,
-      });
-      let deposited = 0n;
-      for (const log of receipt.logs) {
-        if (getAddress(log.address) !== usdg.address) continue;
-        if (log.topics[0] !== TRANSFER_TOPIC) continue;
-        const from = topicToAddress(log.topics[1]);
-        if (!from || from !== getAddress(owner)) continue;
-        deposited += BigInt(log.data);
-      }
-      logger.info(
-        {
-          tokenId: position.tokenId.toString(),
-          mintTxHash: position.mintTxHash,
-          depositedUsdg: deposited.toString(),
-        },
-        'read deposited usdg from mint receipt',
-      );
-      return deposited;
-    } catch (error) {
-      logger.warn(
-        {tokenId: position.tokenId.toString(), error: String(error)},
-        'could not read mint receipt; deposited USDG will be understated',
-      );
-      return 0n;
-    }
+    // The mint is the earliest IncreaseLiquidity this tokenId ever emitted;
+    // any later ones would be a subsequent top-up, not the original deposit.
+    logs.sort((a, b) => Number((a.blockNumber ?? 0n) - (b.blockNumber ?? 0n)));
+    const mint = logs[0]!;
+    const deposited = isToken0(pool, this.options.usdg.address)
+      ? mint.args.amount0!
+      : mint.args.amount1!;
+
+    logger.info(
+      {
+        tokenId: position.tokenId.toString(),
+        mintTxHash: mint.transactionHash,
+        depositedUsdg: deposited.toString(),
+      },
+      'read deposited usdg from mint event',
+    );
+    return deposited;
   }
-}
-
-/** keccak256('Transfer(address,address,uint256)') */
-const TRANSFER_TOPIC =
-  '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
-
-function topicToAddress(topic: Hex | undefined): Hex | undefined {
-  if (!topic || topic.length !== 66) return undefined;
-  return getAddress(`0x${topic.slice(26)}`);
 }

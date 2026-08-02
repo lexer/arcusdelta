@@ -1,7 +1,7 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest';
 import {pino} from 'pino';
 import type {TokenMeta} from '../uniswap/depositService.js';
-import {createPoolKey} from '../uniswap/poolKey.js';
+import type {PoolIdentity} from '../uniswap/poolAddress.js';
 import type {PoolState} from '../uniswap/poolReader.js';
 import type {OwnedPosition} from '../uniswap/positionReader.js';
 import {getSqrtRatioAtTick} from '../uniswap/tickMath.js';
@@ -29,6 +29,14 @@ const NVDA: TokenMeta = {
   decimals: 18,
 };
 
+const POOL: PoolIdentity = {
+  token0: USDG.address,
+  token1: NVDA.address,
+  fee: 3000,
+  tickSpacing: 60,
+  address: '0xB944cec30Bd4175855215D767ADC81F39e5f7E2B',
+};
+
 const UNRELATED = '0x322F0929c4625eD5bAd873c95208D54E1c003b2d';
 
 const POSITION: OwnedPosition = {
@@ -36,7 +44,8 @@ const POSITION: OwnedPosition = {
   tickLower: 223080,
   tickUpper: 223740,
   liquidity: 60_210_398_382_745n,
-  mintTxHash: '0xmint',
+  feeGrowthInside0LastX128: 0n,
+  feeGrowthInside1LastX128: 0n,
 };
 
 /** The live buy: 10 USDG for ~0.0504 NVDA. */
@@ -69,10 +78,25 @@ function sellLog() {
   };
 }
 
+/** The mint event for POSITION: 13 USDG (token0) deposited. */
+function mintEventLog(amount0 = 13_000_000n) {
+  return {
+    blockNumber: 100n,
+    transactionHash: '0xmint',
+    args: {
+      tokenId: POSITION.tokenId,
+      liquidity: POSITION.liquidity,
+      amount0,
+      amount1: 40_000_000_000_000_000n,
+    },
+  };
+}
+
 interface HarnessOptions {
   logs?: unknown[];
   positions?: OwnedPosition[];
   stockBalance?: bigint;
+  mintLogs?: unknown[];
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -84,32 +108,23 @@ function harness(options: HarnessOptions = {}) {
     if (functionName === 'balanceOf') {
       return Promise.resolve(options.stockBalance ?? 0n);
     }
-    return Promise.reject(new Error(`unexpected ${functionName}`));
+    throw new Error(`unexpected ${functionName}`);
   });
+
+  const getLogs = vi
+    .fn()
+    .mockResolvedValueOnce(options.mintLogs ?? [mintEventLog()]);
 
   const publicClient = {
     getBlockNumber: vi.fn().mockResolvedValue(40_000n),
     readContract,
-    getTransactionReceipt: vi.fn().mockResolvedValue({
-      logs: [
-        {
-          address: USDG.address,
-          topics: [
-            '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef',
-            `0x${OWNER.slice(2).toLowerCase().padStart(64, '0')}`,
-            `0x${'11'.repeat(32)}`,
-          ],
-          data: `0x${13_000_000n.toString(16).padStart(64, '0')}`,
-        },
-      ],
-    }),
+    getLogs,
   };
 
   const readState = vi.fn().mockResolvedValue({
-    poolId: `0x${'3b'.repeat(32)}`,
+    poolAddress: POOL.address,
     sqrtPriceX96: getSqrtRatioAtTick(223440),
     tick: 223440,
-    lpFee: 3000,
     liquidity: 817_184_618_165_972_105n,
   } satisfies PoolState);
 
@@ -128,12 +143,12 @@ function harness(options: HarnessOptions = {}) {
     },
     logger: pino({level: 'silent'}),
     chainId: 4663,
-    poolKey: createPoolKey(USDG.address, NVDA.address, 3000, 60),
+    pool: POOL,
     usdg: USDG,
     stock: NVDA,
   };
 
-  return {reporter: new PnlReporter(reporterOptions)};
+  return {reporter: new PnlReporter(reporterOptions), getLogs};
 }
 
 beforeEach(() => {
@@ -242,15 +257,43 @@ describe('position valuation', () => {
     expect(report.breakdown.openValueUsdg).toBeGreaterThan(0);
   });
 
-  it('counts the USDG that funded the position as capital in', async () => {
-    // Read from the mint receipt, not from any Arcus trade.
-    const {reporter} = harness({logs: [buyLog()], positions: [POSITION]});
+  it('counts the USDG that funded the position as capital in, from the mint event', async () => {
+    const {reporter, getLogs} = harness({
+      logs: [buyLog()],
+      positions: [POSITION],
+    });
 
     const report = await reporter.report(OWNER, 0n);
 
     expect(report.positions[0]?.depositedUsdg).toBe(13_000_000n);
     // 10 USDG of buys plus 13 USDG deposited.
     expect(report.breakdown.capitalInUsdg).toBeCloseTo(23, 6);
+    expect(getLogs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: {tokenId: POSITION.tokenId},
+      }),
+    );
+  });
+
+  it('takes the earliest mint event when several are found', async () => {
+    const laterTopUp = {...mintEventLog(99_000_000n), blockNumber: 200n};
+    const theActualMint = {...mintEventLog(13_000_000n), blockNumber: 50n};
+    const {reporter} = harness({
+      positions: [POSITION],
+      mintLogs: [laterTopUp, theActualMint],
+    });
+
+    const report = await reporter.report(OWNER, 0n);
+
+    expect(report.positions[0]?.depositedUsdg).toBe(13_000_000n);
+  });
+
+  it('reports zero deposited when no mint event is found', async () => {
+    const {reporter} = harness({positions: [POSITION], mintLogs: []});
+
+    const report = await reporter.report(OWNER, 0n);
+
+    expect(report.positions[0]?.depositedUsdg).toBe(0n);
   });
 });
 

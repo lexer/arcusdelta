@@ -19,22 +19,23 @@ const NVDA: TokenMeta = {
 };
 
 const plan: DepositPlan = {
-  poolKey: {
-    currency0: USDG.address,
-    currency1: NVDA.address,
+  pool: {
+    token0: USDG.address,
+    token1: NVDA.address,
     fee: 3000,
     tickSpacing: 60,
-    hooks: '0x0000000000000000000000000000000000000000',
+    address: '0xB944cec30Bd4175855215D767ADC81F39e5f7E2B',
   },
-  poolId: `0x${'3b'.repeat(32)}`,
   currentTick: 223440,
   tickLower: 223140,
   tickUpper: 223740,
   liquidity: 1_234_567_890n,
   stockAmount: 25_178_400_616_157_272n,
   usdgAmount: 5_000_000n,
-  amount0Max: 5_025_000n,
-  amount1Max: 25_304_292_619_238_058n,
+  amount0Desired: 5_025_000n,
+  amount1Desired: 25_304_292_619_238_058n,
+  amount0Min: 4_975_000n,
+  amount1Min: 25_052_508_611_476_486n,
   usdgBalance: 1_000_000_000n,
 };
 

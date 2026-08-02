@@ -15,7 +15,7 @@ const U256 = 2n ** 256n;
 /**
  * USDG per whole stock token, as a float for display.
  *
- * The pool price is currency1-per-currency0 in atoms; USDG is currency0 here,
+ * The pool price is token1-per-token0 in atoms; USDG is token0 here,
  * so the quote is inverted and rescaled by the decimal difference. Float is
  * fine because this only ever formats a report — every amount that matters
  * stays in atoms.

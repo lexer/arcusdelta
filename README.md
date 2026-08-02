@@ -6,7 +6,7 @@ Automated market-making bot for tokenized stocks on Arcus spot and Robinhood Cha
 
 ## Status
 
-The full strategy is implemented: buy a stock token on Arcus, open a Uniswap v4 position with a ±X% range, then watch the pool and exit when it goes one-sided — closing the position, collecting fees, and selling the stock token back to USDG. See [docs/architecture.md](docs/architecture.md).
+The full strategy is implemented: buy a stock token on Arcus, open a Uniswap v3 position with a ±X% range, then watch the pool and exit when it goes one-sided — closing the position, collecting fees, and selling the stock token back to USDG. See [docs/architecture.md](docs/architecture.md).
 
 ## Setup
 
@@ -28,15 +28,13 @@ Fill in `.env`. `SEED` is the production wallet mnemonic and has no default; eve
 | `SLIPPAGE_BPS` | `1` (0.01%) |
 | `RANGE_DEVIATION_PERCENT` | `3` |
 | `POOL_FEE` | `3000` (0.3%) |
-| `POOL_TICK_SPACING` | `60` |
 | `LP_SLIPPAGE_BPS` | `50` |
 | `MINT_DEADLINE_SECONDS` | `300` |
 | `POOL_CHECK_INTERVAL_SECONDS` | `30` |
 | `EXIT_CONFIRMATIONS` | `3` |
-| `POSITION_LOOKBACK_BLOCKS` | `500000` |
 | `CLOSE_SLIPPAGE_BPS` | `100` |
 
-`POOL_FEE` and `POOL_TICK_SPACING` must together match an initialized pool — v4 does not derive one from the other, and a mismatched pair addresses a different pool.
+`POOL_FEE` must match a pool the factory has actually created for the pair — tickSpacing is derived from it live via `factory.feeAmountTickSpacing()`, not configured.
 
 ## Read-only previews
 
@@ -102,7 +100,7 @@ It prints principal, fees, and the guaranteed minimums, then waits for you to ty
     at least   14.864425 USDG + 0.063590983513677127 NVDA
 ```
 
-The burn returns principal and fees together, so there is no separate claim step. `--dry-run` reports without sending, `--token-id <id>` exits one position, `--yes` skips the prompt.
+`decreaseLiquidity` and `collect` are bundled into one `multicall` transaction, so principal and fees arrive together with no separate claim step. `--dry-run` reports without sending, `--token-id <id>` exits one position, `--yes` skips the prompt.
 
 ## Profit and loss
 

@@ -16,8 +16,6 @@ const POOL: PoolIdentity = {
   address: '0xB944cec30Bd4175855215D767ADC81F39e5f7E2B',
 };
 
-const OTHER_POOL: PoolIdentity = {...POOL, token1: OTHER};
-
 interface FakePosition {
   token0: string;
   token1: string;

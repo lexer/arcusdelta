@@ -25,6 +25,8 @@ const POSITION: OwnedPosition = {
   tickLower: 223080,
   tickUpper: 223740,
   liquidity: 60_210_398_382_745n,
+  feeGrowthInside0LastX128: 0n,
+  feeGrowthInside1LastX128: 0n,
 };
 
 const PLAN: ExitPlan = {

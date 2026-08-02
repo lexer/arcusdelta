@@ -1,6 +1,6 @@
 # 0005 — Migrate from Uniswap v4 to v3
 
-Status: in progress
+Status: implemented and verified read-only against mainnet; live mint/close not yet run under v3
 
 ## Context
 
@@ -75,6 +75,16 @@ src/uniswap/
 
 ## Verification
 
-- `npm run lint`, `npm run typecheck`, `npm test` green.
-- `npm run position` / `npm run pnl` run read-only against mainnet against the live NVDA and AAPL pools.
+- `npm run lint`, `npm run typecheck`, `npm test` green — 233 tests.
+- `npm run position` / `npm run exit --dry-run` / `npm run pnl` run read-only against mainnet against the live USDG/AAPL pool.
 - Live mint/close executed by the operator, never by the agent.
+
+## Findings from implementation
+
+- `factory.feeAmountTickSpacing` confirmed live: 100→1, 500→10, 3000→60, 10000→200. Matches the constant table Uniswap documents, but read from chain rather than assumed.
+- The documented v3 addresses were correctly checksummed this time (unlike v4's, which were lowercase and rejected by viem at call time — the same `deployments.test.ts` checksum-assertion pattern is carried over as a guard).
+- `npm run position` resolved the live USDG/AAPL pool at the exact address independently verified during planning (`0x783C9bbB…4b7Ed`), read tick `218994`, and correctly reported the wallet holds 0 AAPL (the position was closed before this migration started).
+- `npm run exit --dry-run` correctly reported no open positions in the configured pool — fast (~1.7s total), since discovery is now a `balanceOf` + `tokenOfOwnerByIndex` read rather than a chunked log scan.
+- `npm run pnl` reconstructed the closed AAPL round trip from chain logs unaffected by the migration (that path doesn't touch positions or pools): 25,000 USDG in, 19,983.05 USDG out, net −5,016.95 USDG (−20.07%). This is real trading history, not a migration artifact.
+- **Deposit detection changed approach.** v4's log-scanning discovery incidentally captured each position's mint transaction hash; v3's enumeration-based discovery has no equivalent side channel. Replaced with a targeted scan of the position manager's `IncreaseLiquidity` event filtered on the tokenId's indexed topic — exact amounts from the event itself, not inferred from ERC20 Transfer logs. Only unit-tested so far; no position exists right now to exercise it live.
+- `permit2.ts` from the v4 build was never actually deleted in an earlier commit — the `git rm` silently failed because one of its two pathspecs (`permit2.test.ts`) didn't exist, and multi-pathspec `git rm` aborts entirely rather than proceeding with the paths that do match. Caught by a repo-wide grep for leftover v4 terms before calling the migration done; removed in this pass.

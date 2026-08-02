@@ -96,7 +96,7 @@ describe('read', () => {
 
   it('reports zero once the last checkpoint already includes everything', async () => {
     const {reader} = harness();
-    const {fees0, fees1} = await reader.read(POOL, position);
+    const {fees0} = await reader.read(POOL, position);
 
     const caughtUp = await reader.read(POOL, {
       ...position,

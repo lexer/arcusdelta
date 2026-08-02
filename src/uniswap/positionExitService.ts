@@ -66,6 +66,10 @@ export class PositionExitService {
     return {usdg: this.options.usdg, stock: this.options.stock};
   }
 
+  get pool(): PoolIdentity {
+    return this.options.pool;
+  }
+
   /** Read-only. What the burn would return, principal and fees separately. */
   async plan(position: OwnedPosition, sqrtPriceX96: bigint): Promise<ExitPlan> {
     const {amount0, amount1} = getAmountsForLiquidity(

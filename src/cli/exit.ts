@@ -9,7 +9,6 @@
 import {Command} from 'commander';
 import {loadConfig, loggableConfig} from '../config/config.js';
 import {createContainer} from '../di/container.js';
-import {createPoolKey} from '../uniswap/poolKey.js';
 import {createPoolReader} from '../uniswap/poolReader.js';
 import {createPositionReader} from '../uniswap/positionReader.js';
 import {runExitCommand} from './exitCommand.js';
@@ -50,31 +49,21 @@ async function main(): Promise<number> {
   try {
     const exitService = await container.createExitService();
     const {usdg, stock} = exitService.tokens;
-    const poolKey = createPoolKey(
-      usdg.address,
-      stock.address,
-      config.poolFee,
-      config.poolTickSpacing,
-    );
+    const pool = exitService.pool;
 
-    const poolReader = createPoolReader(
-      wallet.getPublicClient(),
-      config.chainId,
-    );
+    const poolReader = createPoolReader(wallet.getPublicClient());
     const positionReader = createPositionReader(
       wallet.getPublicClient(),
       config.chainId,
-      config.positionLookbackBlocks,
-      logger,
     );
 
     const [poolState, positions] = await Promise.all([
-      poolReader.readState(poolKey),
+      poolReader.readState(pool),
       options.tokenId
         ? positionReader
-            .read(BigInt(options.tokenId), poolKey, owner)
+            .read(BigInt(options.tokenId), pool, owner)
             .then(p => (p ? [p] : []))
-        : positionReader.discover(poolKey, owner),
+        : positionReader.discover(pool, owner),
     ]);
 
     if (options.tokenId && positions.length === 0) {

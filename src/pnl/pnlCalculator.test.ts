@@ -25,7 +25,7 @@ describe('poolPriceUsdgPerStock', () => {
     expect(price).toBeLessThan(210);
   });
 
-  it('falls as the tick rises, since USDG is currency0', () => {
+  it('falls as the tick rises, since USDG is token0', () => {
     const lower = poolPriceUsdgPerStock(
       getSqrtRatioAtTick(223000),
       USDG_DECIMALS,

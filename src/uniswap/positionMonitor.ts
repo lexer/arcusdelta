@@ -2,7 +2,7 @@
  * Watches open positions and closes them once the pool has shifted fully to
  * one side of their range.
  *
- * `currency0` is USDG and `currency1` is the stock token, so by Uniswap's own
+ * `token0` is USDG and `token1` is the stock token, so by Uniswap's own
  * convention a tick at or below `tickLower` means the position is entirely
  * USDG, and at or above `tickUpper` entirely stock. Either way the position has
  * stopped earning a two-sided spread, so it is closed, fees are collected with

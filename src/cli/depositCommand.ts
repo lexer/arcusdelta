@@ -27,7 +27,7 @@ export interface DepositCommandDeps {
 
 /** Price of one stock token in USDG at a given tick, for human display. */
 function priceAtTick(tick: number, usdg: TokenMeta, stock: TokenMeta): string {
-  // p = 1.0001^tick is currency1 per currency0 in atoms; USDG is currency0.
+  // p = 1.0001^tick is token1 per token0 in atoms; USDG is token0.
   const rawPrice = 1.0001 ** tick;
   const adjusted = rawPrice * 10 ** (usdg.decimals - stock.decimals);
   if (!Number.isFinite(adjusted) || adjusted === 0) return 'n/a';
@@ -41,11 +41,12 @@ export function buildDepositSummary(
   const {usdg, stock} = deps;
   return [
     '',
-    `About to open a Uniswap v4 liquidity position in ${usdg.symbol}/${stock.symbol}`,
+    `About to open a Uniswap v3 liquidity position in ${usdg.symbol}/${stock.symbol}`,
     '',
     `  deposit      ${formatUnits(plan.stockAmount, stock.decimals)} ${stock.symbol}`,
     `  deposit      ${formatUnits(plan.usdgAmount, usdg.decimals)} ${usdg.symbol}`,
-    `  max pull     ${formatUnits(plan.amount0Max, usdg.decimals)} ${usdg.symbol} / ${formatUnits(plan.amount1Max, stock.decimals)} ${stock.symbol}`,
+    `  max pull     ${formatUnits(plan.amount0Desired, usdg.decimals)} ${usdg.symbol} / ${formatUnits(plan.amount1Desired, stock.decimals)} ${stock.symbol}`,
+    `  min accepted ${formatUnits(plan.amount0Min, usdg.decimals)} ${usdg.symbol} / ${formatUnits(plan.amount1Min, stock.decimals)} ${stock.symbol}`,
     `  range        ticks ${plan.tickLower} to ${plan.tickUpper} (±${deps.rangeDeviationPercent}%)`,
     `  price band   ${priceAtTick(plan.tickUpper, usdg, stock)} to ${priceAtTick(plan.tickLower, usdg, stock)} ${usdg.symbol} per ${stock.symbol}`,
     `  pool price   ${priceAtTick(plan.currentTick, usdg, stock)} ${usdg.symbol} per ${stock.symbol} (tick ${plan.currentTick})`,

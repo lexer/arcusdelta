@@ -10,6 +10,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "buy": "tsx src/cli/buy.ts",
+    "cycle": "tsx src/cli/cycle.ts",
     "quote": "tsx src/cli/quote.ts",
     "deposit": "tsx src/cli/deposit.ts",
     "position": "tsx src/cli/position.ts",

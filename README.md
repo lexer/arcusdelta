@@ -33,6 +33,8 @@ Fill in `.env`. `SEED` is the production wallet mnemonic and has no default; eve
 | `POOL_CHECK_INTERVAL_SECONDS` | `30` |
 | `EXIT_CONFIRMATIONS` | `3` |
 | `CLOSE_SLIPPAGE_BPS` | `100` |
+| `TWAP_CHUNKS` | `1` (disabled) |
+| `TWAP_INTERVAL_SECONDS` | `10` |
 
 Fill in `symbols.json` — the list of stock tokens the bot trades. Each entry needs at minimum a `symbol` and `stockTokenAddress`; every other field is optional and falls back to the corresponding `.env` default above when omitted:
 
@@ -55,6 +57,18 @@ npm run buy -- --symbol NVDA
 
 Fund-moving commands (`buy`, `deposit`, `exit`) batch across whatever symbols are selected: every symbol is planned first (read-only), one combined summary is printed, one confirmation covers the whole batch, then each symbol executes independently — a failure on one symbol does not stop or lose track of the others.
 
+## TWAP execution
+
+Every Arcus trade — a buy in `npm run buy`/`npm run cycle`, or the post-exit sell in `npm run exit`/`npm run monitor` — can be split into smaller chunks executed a few seconds apart instead of one large order, to reduce price impact. Set `twapChunks` (and optionally `twapIntervalSeconds`) per symbol in `symbols.json`, or `TWAP_CHUNKS`/`TWAP_INTERVAL_SECONDS` in `.env` as the default for every symbol that doesn't override it:
+
+```jsonc
+{"symbol": "AAPL", "stockTokenAddress": "0x...", "twapChunks": 4, "twapIntervalSeconds": 15}
+```
+
+`twapChunks: 1` (the default) disables it — a trade executes exactly as one quote-sign-submit-poll cycle. With more than one chunk, each gets its own fresh quote (that's the point: re-quoting per chunk, not slicing a single quote), and the confirmation summary shows `(TWAP: N chunks, Ms apart)` for any symbol that has it enabled.
+
+If a chunk fails after earlier ones already settled, the command reports exactly how many chunks filled before stopping — real funds already moved for those, so this is never folded into a generic failure that could be misread as "nothing happened."
+
 ## Read-only previews
 
 ```sh
@@ -73,7 +87,7 @@ None of these sign, approve, or mint. They run the same code paths the spending 
 npm run buy
 ```
 
-Buys every selected symbol on Arcus, then opens each liquidity position. The two steps are confirmed **separately**, because deposit amounts cannot be known until the buys settle. Each prompt prints the real figures for every symbol and waits for you to type `yes`; anything else aborts the whole batch.
+Buys every selected symbol on Arcus, then opens each liquidity position. The two steps are confirmed **separately**, because deposit amounts cannot be known until the buys settle. Each prompt prints the real figures for every symbol and waits for you to type `yes`; anything else aborts the whole batch. A symbol with `twapChunks > 1` splits its buy into that many chunks — see [TWAP execution](#twap-execution).
 
 - `--symbol <ticker>` narrows to one symbol.
 - `--no-deposit` stops after the buys.
@@ -126,7 +140,7 @@ The debounce exists so a single-block wick that mean-reverts cannot trigger a cl
 npm run exit
 ```
 
-Withdraws liquidity, claims accrued fees, and sells the resulting stock token back to USDG on Arcus, across every selected symbol's positions — the same flow the monitor runs automatically when a position goes one-sided, triggered by hand.
+Withdraws liquidity, claims accrued fees, and sells the resulting stock token back to USDG on Arcus, across every selected symbol's positions — the same flow the monitor runs automatically when a position goes one-sided, triggered by hand. The sell splits into chunks the same way a buy does when the symbol has `twapChunks > 1` — see [TWAP execution](#twap-execution).
 
 It prints principal, fees, and the guaranteed minimums for every position, then waits once for you to type `yes`, covering the whole batch:
 

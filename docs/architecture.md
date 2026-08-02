@@ -10,6 +10,8 @@ The Arcus buy delivers the **plain** stock token — the same one the pool uses 
 
 **Multi-symbol** (plan 0007). Every symbol-scoped module (`SpotSwapService`, `DepositService`, `PositionExitService`, `PoolReader`, `PositionReader`, `FeeReader`, tick/liquidity math) already took a resolved pool/token pair as a constructor parameter rather than a global, so none of them changed. What changed is where that parameter comes from: `config/symbols.ts` loads `symbols.json` and resolves each entry against `.env` as defaults, `di/container.ts`'s factory methods now take a `SymbolConfig` and build per-symbol service instances, `PositionMonitor` watches N pools in one process instead of one, and every CLI entrypoint batches across whatever symbols `--symbol` selects (all of them, by default).
 
+**TWAP execution** (plan 0008). Any buy or the post-close sell can split into `twapChunks` pieces, `twapIntervalSeconds` apart, each with its own fresh quote — configured the same way as every other strategy field, per symbol in `symbols.json` falling back to `.env`. This lives entirely inside `SpotSwapService`: `BuyRequest`/`SellRequest` carry the two fields, and `executeBuy`/`executeSell` split the total, quote and settle each chunk in sequence, and aggregate the results (see the "TWAP execution" section below for the mechanics).
+
 ## Modules
 
 | Module | Purpose |
@@ -54,6 +56,27 @@ Every command below defaults to acting on every symbol in `symbols.json`, narrow
 | `npm run cycle` | Buys, deposits, and stays running to watch the opened positions until they exit. Orchestrates `buy` + `monitor` across whatever symbols were selected, no new logic. |
 
 Each preview shares its code path with the command that spends — `quote` with `SpotSwapService.previewQuote`, `position` with `DepositService.plan` — so a preflight cannot drift from what actually executes.
+
+## TWAP execution
+
+`twapChunks` (default 1, disabled) splits a trade — a buy or the post-close sell, both go through `SpotSwapService` — into that many pieces executed `twapIntervalSeconds` apart, to reduce the price impact of one large order.
+
+```mermaid
+graph TD
+    Total[total sellAmount, atoms] --> Split[splitIntoChunks]
+    Split --> C1[chunk 1: quote + settle]
+    C1 -->|sleep intervalSeconds| C2[chunk 2: quote + settle]
+    C2 -->|sleep intervalSeconds| C3[chunk N: quote + settle]
+    C1 --> Agg[aggregate: txHashes, sellAmount, buyAmount, minBuyAmount]
+    C2 --> Agg
+    C3 --> Agg
+```
+
+Splitting happens inside `SpotSwapService`, not as a wrapper around `executeBuy`/`executeSell`, because the entire point is a **fresh quote per chunk** — one quote for the full amount and slicing it after the fact would not reduce price impact at all. `splitIntoChunks` gives every chunk but the last `floor(total / chunks)` and the last the remainder, so the sum is always exactly the requested total. Each chunk reuses the exact same `quoteAndValidate` → `settle` path a single, un-chunked trade already uses (including the submission-failure reconciliation described in Safety properties below), so a chunk cannot diverge from the tested single-trade path. At `twapChunks: 1` the behavior is byte-for-byte what it was before TWAP existed — same logging, same errors, no wrapping.
+
+`BuyResult.txHashes` is one hash per chunk (a single-element array when TWAP is off); `sellAmount`/`buyAmount`/`minBuyAmount` are true sums across chunks — `buyAmount` in particular is *more* accurate than a single pre-trade quote, since it's the sum of what each chunk's own quote actually promised. `orderId` is only meaningful for a single-chunk trade and is `undefined` when chunked.
+
+If a chunk fails after earlier ones already settled, real funds already moved for those — this must never look like a clean, all-or-nothing failure. `ArcusTwapPartialFillError` carries every completed chunk's hash and amounts plus the failed chunk's index, and both `buyCommand.ts` and `exitCommand.ts` report it explicitly ("N of M chunks already filled/sold — do not retry blindly") rather than folding it into a generic error message. A chunk count that would round any chunk to zero atoms is rejected up front via `ArcusTwapConfigError`, before anything is signed.
 
 ## Liquidity position
 
@@ -181,6 +204,8 @@ All extend `ArcusError` and carry the `tradeId`.
 | `ArcusSubmissionError` | Router rejected the signed quote | Yes |
 | `ArcusExecutionFailedError` | Trade settled as failed on chain | Yes |
 | `ArcusPollTimeoutError` | No terminal state within the budget; may still land | Yes |
+| `ArcusTwapConfigError` | `twapChunks` too high for the trade size (a chunk would be zero atoms) | No |
+| `ArcusTwapPartialFillError` | A TWAP chunk failed after earlier ones already settled; carries what filled | Chunks up to the failure |
 
 ## Not yet built
 

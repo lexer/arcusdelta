@@ -1,6 +1,6 @@
 # 0008 — TWAP execution for Arcus swaps
 
-Status: in progress
+Status: complete
 
 ## Context
 

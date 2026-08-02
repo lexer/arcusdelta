@@ -18,12 +18,10 @@ const config: Config = {
   slippageBps: 1,
   rangeDeviationPercent: 3,
   poolFee: 3000,
-  poolTickSpacing: 60,
   lpSlippageBps: 50,
   mintDeadlineSeconds: 300,
   poolCheckIntervalSeconds: 30,
   exitConfirmations: 3,
-  positionLookbackBlocks: 500_000,
   closeSlippageBps: 100,
 };
 

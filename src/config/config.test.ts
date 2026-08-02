@@ -28,7 +28,6 @@ describe('loadConfig', () => {
 
     expect(config.rangeDeviationPercent).toBe(3);
     expect(config.poolFee).toBe(3000);
-    expect(config.poolTickSpacing).toBe(60);
     expect(config.lpSlippageBps).toBe(50);
     expect(config.mintDeadlineSeconds).toBe(300);
   });
@@ -38,7 +37,6 @@ describe('loadConfig', () => {
 
     expect(config.poolCheckIntervalSeconds).toBe(30);
     expect(config.exitConfirmations).toBe(3);
-    expect(config.positionLookbackBlocks).toBe(500_000);
     expect(config.closeSlippageBps).toBe(100);
   });
 

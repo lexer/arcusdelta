@@ -26,12 +26,10 @@ export interface Config {
   readonly slippageBps: number;
   readonly rangeDeviationPercent: number;
   readonly poolFee: number;
-  readonly poolTickSpacing: number;
   readonly lpSlippageBps: number;
   readonly mintDeadlineSeconds: number;
   readonly poolCheckIntervalSeconds: number;
   readonly exitConfirmations: number;
-  readonly positionLookbackBlocks: number;
   readonly closeSlippageBps: number;
 }
 
@@ -62,12 +60,10 @@ export function loadConfig(source: EnvSource = readDotenv()): Config {
     slippageBps: env.SLIPPAGE_BPS,
     rangeDeviationPercent: env.RANGE_DEVIATION_PERCENT,
     poolFee: env.POOL_FEE,
-    poolTickSpacing: env.POOL_TICK_SPACING,
     lpSlippageBps: env.LP_SLIPPAGE_BPS,
     mintDeadlineSeconds: env.MINT_DEADLINE_SECONDS,
     poolCheckIntervalSeconds: env.POOL_CHECK_INTERVAL_SECONDS,
     exitConfirmations: env.EXIT_CONFIRMATIONS,
-    positionLookbackBlocks: env.POSITION_LOOKBACK_BLOCKS,
     closeSlippageBps: env.CLOSE_SLIPPAGE_BPS,
   });
 }
@@ -83,12 +79,10 @@ export function loggableConfig(config: Config): Record<string, unknown> {
     slippageBps: config.slippageBps,
     rangeDeviationPercent: config.rangeDeviationPercent,
     poolFee: config.poolFee,
-    poolTickSpacing: config.poolTickSpacing,
     lpSlippageBps: config.lpSlippageBps,
     mintDeadlineSeconds: config.mintDeadlineSeconds,
     poolCheckIntervalSeconds: config.poolCheckIntervalSeconds,
     exitConfirmations: config.exitConfirmations,
-    positionLookbackBlocks: config.positionLookbackBlocks,
     closeSlippageBps: config.closeSlippageBps,
   };
 }

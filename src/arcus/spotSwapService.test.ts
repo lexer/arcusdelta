@@ -77,11 +77,24 @@ function makeQuote(overrides: Partial<ArcusFirmQuote> = {}): ArcusFirmQuote {
   };
 }
 
-function makeWallet(): WalletProvider {
+interface PublicClientMock {
+  getBlockNumber: ReturnType<typeof vi.fn>;
+  getLogs: ReturnType<typeof vi.fn>;
+}
+
+function makePublicClient(): PublicClientMock {
+  return {
+    getBlockNumber: vi.fn().mockResolvedValue(1_000n),
+    // No reconciliation match by default: existing failure paths still throw.
+    getLogs: vi.fn().mockResolvedValue([]),
+  };
+}
+
+function makeWallet(publicClient: PublicClientMock): WalletProvider {
   return {
     getAccount: () => ({address: TAKER}) as never,
     getWalletClient: () => ({}) as never,
-    getPublicClient: () => ({}) as never,
+    getPublicClient: () => publicClient as never,
   };
 }
 
@@ -93,10 +106,12 @@ interface Harness {
     getStatus: ReturnType<typeof vi.fn>;
   };
   sleep: ReturnType<typeof vi.fn>;
+  publicClient: PublicClientMock;
 }
 
 function harness(
   statuses: StatusResponse['status'][] = ['confirmed'],
+  publicClient: PublicClientMock = makePublicClient(),
 ): Harness {
   const getStatus = vi.fn();
   for (const status of statuses) {
@@ -120,7 +135,7 @@ function harness(
 
   const service = new SpotSwapService({
     router: router as SpotRouter,
-    wallet: makeWallet(),
+    wallet: makeWallet(publicClient),
     tokens: new TokenResolver(
       {getTokenList: () => Promise.resolve([USDG, NVDA])},
       4663,
@@ -131,7 +146,7 @@ function harness(
     sleep,
   });
 
-  return {service, router, sleep};
+  return {service, router, sleep, publicClient};
 }
 
 const request = {
@@ -406,5 +421,85 @@ describe('executeBuy failures after signing', () => {
     );
     // 60s budget at a 2s interval.
     expect(router.getStatus).toHaveBeenCalledTimes(30);
+  });
+});
+
+describe('reconciliation after a submission failure', () => {
+  const RECONCILED_TX = `0x${'ef'.repeat(32)}` as const;
+  const ROUTER = '0x0000000000000000000000000000000000dEaD';
+
+  it('reports a real result when the trade actually settled on chain', async () => {
+    const publicClient = makePublicClient();
+    publicClient.getLogs
+      .mockResolvedValueOnce([
+        {
+          args: {from: TAKER, to: ROUTER, value: BigInt(SELL_ATOMS)},
+          transactionHash: RECONCILED_TX,
+          blockNumber: 1_005n,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          args: {from: ROUTER, to: TAKER, value: 495_000_000_000_000_000n},
+          transactionHash: RECONCILED_TX,
+          blockNumber: 1_005n,
+        },
+      ]);
+    const {service, router} = harness(['confirmed'], publicClient);
+    router.submitSignedQuote.mockRejectedValue(new Error('502 Bad Gateway'));
+
+    const result = await service.executeBuy(request);
+
+    expect(result).toMatchObject({
+      txHash: RECONCILED_TX,
+      orderId: undefined,
+      buyAmount: '495000000000000000',
+    });
+    expect(publicClient.getLogs).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({address: USDG.address}),
+    );
+    expect(publicClient.getLogs).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({address: NVDA.address}),
+    );
+  });
+
+  it('falls back to the quoted amount when no matching buy-token transfer is found', async () => {
+    const publicClient = makePublicClient();
+    publicClient.getLogs
+      .mockResolvedValueOnce([
+        {
+          args: {from: TAKER, to: ROUTER, value: BigInt(SELL_ATOMS)},
+          transactionHash: RECONCILED_TX,
+          blockNumber: 1_005n,
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const {service, router} = harness(['confirmed'], publicClient);
+    router.submitSignedQuote.mockRejectedValue(new Error('502 Bad Gateway'));
+
+    const result = await service.executeBuy(request);
+
+    expect(result.txHash).toBe(RECONCILED_TX);
+    // The quote fixture's buyAmount — nothing on chain confirms the real one.
+    expect(result.buyAmount).toBe('500000000000000000');
+  });
+
+  it('still throws when no on-chain transfer matches the exact amount', async () => {
+    const publicClient = makePublicClient();
+    publicClient.getLogs.mockResolvedValueOnce([
+      {
+        args: {from: TAKER, to: ROUTER, value: 1n},
+        transactionHash: TX_HASH,
+        blockNumber: 1_005n,
+      },
+    ]);
+    const {service, router} = harness(['confirmed'], publicClient);
+    router.submitSignedQuote.mockRejectedValue(new Error('502 Bad Gateway'));
+
+    await expect(service.executeBuy(request)).rejects.toThrow(
+      ArcusSubmissionError,
+    );
   });
 });

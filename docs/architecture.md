@@ -164,6 +164,7 @@ sequenceDiagram
 - The operator must type `yes` before anything is signed. `--yes` skips the prompt for future automation but is never the default.
 - Quote validation runs **before** signing. A quote that spends a different amount than requested, guarantees no minimum output, or has already expired is rejected with nothing signed.
 - Only the read-only status poll retries. Nothing in the quote → sign → submit chain is retried automatically, so a failure never risks funds twice.
+- A submission-stage error (e.g. a transport-level 502) does not necessarily mean the trade didn't happen — confirmed 2026-08-02, when a sell settled on chain despite the router failing to answer. Before reporting failure, `SpotSwapService` scans for a matching on-chain transfer of the exact amount, from the exact block the attempt started, and reports the real result if found — instead of a false failure that could otherwise be misread as safe to retry.
 - The poll loop is bounded by attempt count, so it always terminates. A timeout reports the tx hash, since the trade may still settle.
 - A non-permittable sell token is surfaced as an error describing the required one-time `approve`. The bot does not send that transaction itself, because it spends gas without operator confirmation.
 - The seed phrase is never logged: it is excluded from `loggableConfig` and additionally covered by pino redaction paths.

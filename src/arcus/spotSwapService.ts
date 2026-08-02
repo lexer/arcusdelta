@@ -20,7 +20,7 @@ import {
   type SubmitResponse,
   type TokenInfo,
 } from '@arcus-xyz/arcus-spot-sdk';
-import {formatUnits, parseUnits, type Hex} from 'viem';
+import {formatUnits, parseAbiItem, parseUnits, type Hex} from 'viem';
 import type {WalletProvider} from '../chain/walletProvider.js';
 import type {Logger} from '../logging/logger.js';
 import {
@@ -41,6 +41,10 @@ import type {
 
 const POLL_INTERVAL_MS = 2_000;
 const MAX_POLL_ATTEMPTS = 30;
+
+const TRANSFER_EVENT = parseAbiItem(
+  'event Transfer(address indexed from, address indexed to, uint256 value)',
+);
 
 /**
  * Human-readable unit price. Display only — float division, never used to size
@@ -143,8 +147,14 @@ export class SpotSwapService {
       'buy started',
     );
 
-    const {quote} = await this.prepare(request, log);
-    const result = await this.settle(quote, request.tradeId, log);
+    const {quote, sellToken, buyToken} = await this.prepare(request, log);
+    const result = await this.settle(
+      quote,
+      request.tradeId,
+      sellToken.address,
+      buyToken.address,
+      log,
+    );
 
     log.info({...result, elapsedMs: Date.now() - startedAt}, 'buy completed');
     return result;
@@ -180,7 +190,13 @@ export class SpotSwapService {
       request.slippageBps,
       log,
     );
-    const result = await this.settle(quote, request.tradeId, log);
+    const result = await this.settle(
+      quote,
+      request.tradeId,
+      sellToken.address,
+      buyToken.address,
+      log,
+    );
 
     log.info({...result, elapsedMs: Date.now() - startedAt}, 'sell completed');
     return result;
@@ -193,6 +209,8 @@ export class SpotSwapService {
   private async settle(
     quote: ArcusFirmQuote,
     tradeId: string,
+    sellToken: Hex,
+    buyToken: Hex,
     log: Logger,
   ): Promise<BuyResult> {
     const permit = await this.buildPermit(quote, tradeId, log);
@@ -203,7 +221,35 @@ export class SpotSwapService {
     });
     log.info('quote signed');
 
-    const submission = await this.submit(signed, tradeId, log);
+    // Captured before submitting so a reconciliation scan (below) covers
+    // exactly this attempt, not any earlier trade.
+    const fromBlock = await this.wallet.getPublicClient().getBlockNumber();
+
+    let submission: SubmitResponse;
+    try {
+      submission = await this.submit(signed, tradeId, log);
+    } catch (error) {
+      const reconciled = await this.reconcileSettlement(
+        sellToken,
+        BigInt(quote.sellAmount),
+        buyToken,
+        quote.buyAmount,
+        fromBlock,
+        tradeId,
+        log,
+      );
+      if (!reconciled) throw error;
+
+      return {
+        tradeId,
+        txHash: reconciled.txHash,
+        orderId: undefined,
+        sellAmount: quote.sellAmount,
+        buyAmount: reconciled.buyAmount,
+        minBuyAmount: quote.arcus.minAmountOut,
+      };
+    }
+
     const orderId =
       submission.venue === 'arcus' ? submission.orderId : undefined;
 
@@ -221,6 +267,75 @@ export class SpotSwapService {
       sellAmount: quote.sellAmount,
       buyAmount: quote.buyAmount,
       minBuyAmount: quote.arcus.minAmountOut,
+    };
+  }
+
+  /**
+   * A submission-stage failure (e.g. a transport error) does not prove the
+   * router never processed the swap — confirmed 2026-08-02, when a sell
+   * settled on chain even though `submitSignedQuote` threw. Before letting a
+   * false failure stand, check whether the exact sell landed anyway, scanning
+   * only from the block captured just before this attempt so an unrelated
+   * earlier trade of the same size cannot be mistaken for it.
+   */
+  private async reconcileSettlement(
+    sellToken: Hex,
+    sellAmountAtoms: bigint,
+    buyToken: Hex,
+    quotedBuyAmount: string,
+    fromBlock: bigint,
+    tradeId: string,
+    log: Logger,
+  ): Promise<{txHash: Hex; buyAmount: string} | undefined> {
+    const client = this.wallet.getPublicClient();
+    const owner = this.wallet.getAccount().address;
+
+    const sellTransfers = await client.getLogs({
+      address: sellToken,
+      event: TRANSFER_EVENT,
+      args: {from: owner},
+      fromBlock,
+      toBlock: 'latest',
+    });
+    const settled = sellTransfers.findLast(
+      transfer => transfer.args.value === sellAmountAtoms,
+    );
+    if (!settled) return undefined;
+
+    log.warn(
+      {tradeId, txHash: settled.transactionHash},
+      'submission reported failure, but a matching transfer was found on ' +
+        'chain — reconciling instead of reporting a false failure',
+    );
+
+    const buyTransfersInBlock = await client.getLogs({
+      address: buyToken,
+      event: TRANSFER_EVENT,
+      args: {to: owner},
+      fromBlock: settled.blockNumber,
+      toBlock: settled.blockNumber,
+    });
+    const buyTransfers = buyTransfersInBlock.filter(
+      transfer => transfer.transactionHash === settled.transactionHash,
+    );
+
+    if (buyTransfers.length === 0) {
+      log.warn(
+        {tradeId, txHash: settled.transactionHash},
+        'reconciled sell but found no matching buy-token transfer in the ' +
+          'same transaction; reporting the quoted amount as an estimate',
+      );
+      return {txHash: settled.transactionHash, buyAmount: quotedBuyAmount};
+    }
+
+    const buyAmount = buyTransfers.reduce(
+      (sum, transfer) => sum + (transfer.args.value ?? 0n),
+      0n,
+    );
+
+    return {
+      txHash: settled.transactionHash,
+      buyAmount: buyAmount.toString(),
     };
   }
 

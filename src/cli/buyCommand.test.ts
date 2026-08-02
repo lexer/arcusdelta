@@ -1,4 +1,5 @@
 import {describe, expect, it, vi} from 'vitest';
+import {ArcusTwapPartialFillError} from '../arcus/errors.js';
 import {
   buildBuySummary,
   runBuyCommand,
@@ -13,6 +14,8 @@ const NVDA_ITEM: BuyRequestItem = {
   stockTokenAddress: '0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC',
   usdgBuyAmount: '100',
   slippageBps: 1,
+  twapChunks: 1,
+  twapIntervalSeconds: 10,
 };
 
 const AAPL_ITEM: BuyRequestItem = {
@@ -20,12 +23,14 @@ const AAPL_ITEM: BuyRequestItem = {
   stockTokenAddress: '0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9',
   usdgBuyAmount: '50',
   slippageBps: 5,
+  twapChunks: 1,
+  twapIntervalSeconds: 10,
 };
 
 function makeResult(overrides: Record<string, unknown> = {}) {
   return {
     tradeId: 'trade-1',
-    txHash: '0xabc',
+    txHashes: ['0xabc'],
     orderId: undefined,
     sellAmount: '100000000',
     buyAmount: '500000000000000000',
@@ -129,6 +134,28 @@ describe('partial failure', () => {
     expect(outcomes![1]).toMatchObject({symbol: 'AAPL'});
     expect(outcomes![1]!.result).toBeDefined();
   });
+
+  it('reports how many TWAP chunks already filled when a chunk fails mid-sequence', async () => {
+    const executeBuy = vi.fn().mockRejectedValueOnce(
+      new ArcusTwapPartialFillError(
+        'TWAP chunk 3 of 5 failed: router unavailable',
+        'trade-1',
+        [
+          {txHash: '0x1', sellAmount: '20', buyAmount: '100'},
+          {txHash: '0x2', sellAmount: '20', buyAmount: '100'},
+        ],
+        3,
+        5,
+      ),
+    );
+    const print = vi.fn();
+    const subject = deps({items: [NVDA_ITEM], buyService: {executeBuy}, print});
+
+    await runBuyCommand(subject);
+
+    const printed = print.mock.calls.map(call => call[0]).join('\n');
+    expect(printed).toContain('2 of 5 chunks already filled');
+  });
 });
 
 describe('buildBuySummary', () => {
@@ -160,5 +187,23 @@ describe('buildBuySummary', () => {
     });
 
     expect(summary).toContain('1 symbol from');
+  });
+
+  it('mentions TWAP chunking only for a symbol that has it enabled', () => {
+    const summary = buildBuySummary(
+      [NVDA_ITEM, {...AAPL_ITEM, twapChunks: 4, twapIntervalSeconds: 15}],
+      {
+        walletAddress: WALLET,
+        chainId: 4663,
+        arcusRouterUrl: 'https://router.spot.arcus.xyz/v1',
+        sellSymbol: 'USDG',
+      },
+    );
+
+    const lines = summary.split('\n');
+    expect(lines.find(l => l.includes('NVDA'))).not.toContain('TWAP');
+    expect(lines.find(l => l.includes('AAPL'))).toContain(
+      'TWAP: 4 chunks, 15s apart',
+    );
   });
 });

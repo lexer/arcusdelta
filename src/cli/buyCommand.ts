@@ -7,6 +7,7 @@
  */
 
 import type {Hex} from 'viem';
+import {ArcusTwapPartialFillError} from '../arcus/errors.js';
 import type {BuyRequest, BuyResult} from '../arcus/types.js';
 
 /** One symbol's buy request. Independent of every other symbol's. */
@@ -15,6 +16,8 @@ export interface BuyRequestItem {
   readonly stockTokenAddress: Hex;
   readonly usdgBuyAmount: string;
   readonly slippageBps: number;
+  readonly twapChunks: number;
+  readonly twapIntervalSeconds: number;
 }
 
 /** Per-symbol outcome. Exactly one of `result`/`error` is set. */
@@ -53,8 +56,12 @@ export function buildBuySummary(
   ];
 
   for (const item of items) {
+    const twap =
+      item.twapChunks > 1
+        ? `  (TWAP: ${item.twapChunks} chunks, ${item.twapIntervalSeconds}s apart)`
+        : '';
     lines.push(
-      `  ${item.symbol}  spend ${item.usdgBuyAmount} ${deps.sellSymbol} -> ${item.stockTokenAddress}  slippage ${item.slippageBps} bps`,
+      `  ${item.symbol}  spend ${item.usdgBuyAmount} ${deps.sellSymbol} -> ${item.stockTokenAddress}  slippage ${item.slippageBps} bps${twap}`,
     );
   }
 
@@ -91,10 +98,15 @@ export async function runBuyCommand(
         buyToken: item.stockTokenAddress,
         sellAmount: item.usdgBuyAmount,
         slippageBps: item.slippageBps,
+        twapChunks: item.twapChunks,
+        twapIntervalSeconds: item.twapIntervalSeconds,
       });
       outcomes.push({symbol: item.symbol, result});
 
-      deps.print(`${item.symbol}: trade confirmed. tx ${result.txHash}`);
+      const txWord = result.txHashes.length === 1 ? 'tx' : 'txs';
+      deps.print(
+        `${item.symbol}: trade confirmed. ${txWord} ${result.txHashes.join(', ')}`,
+      );
       deps.print(`  spent      ${result.sellAmount} atoms`);
       deps.print(`  received   ${result.buyAmount} atoms (quoted)`);
       deps.print(`  guaranteed ${result.minBuyAmount} atoms minimum`);
@@ -102,6 +114,11 @@ export async function runBuyCommand(
       const message = error instanceof Error ? error.message : String(error);
       outcomes.push({symbol: item.symbol, error: message});
       deps.print(`${item.symbol}: buy failed — ${message}`);
+      if (error instanceof ArcusTwapPartialFillError) {
+        deps.print(
+          `  ${error.completedChunks.length} of ${error.totalChunks} chunks already filled — do not retry blindly`,
+        );
+      }
     }
   }
   return outcomes;

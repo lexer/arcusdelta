@@ -8,6 +8,7 @@
  */
 
 import {formatUnits} from 'viem';
+import {ArcusTwapPartialFillError} from '../arcus/errors.js';
 import type {TokenMeta} from '../uniswap/depositService.js';
 import type {ExitPlan, ExitResult} from '../uniswap/positionExitService.js';
 import type {OwnedPosition} from '../uniswap/positionReader.js';
@@ -143,8 +144,9 @@ export async function runExitCommand(
         deps.print(`  no ${item.stock.symbol} to sell`);
         continue;
       }
+      const txWord = (result.saleTxHashes?.length ?? 0) === 1 ? 'tx' : 'txs';
       deps.print(
-        `  sold ${formatUnits(result.stockSold, item.stock.decimals)} ${item.stock.symbol}  tx ${result.saleTxHash}`,
+        `  sold ${formatUnits(result.stockSold, item.stock.decimals)} ${item.stock.symbol}  ${txWord} ${(result.saleTxHashes ?? []).join(', ')}`,
       );
       if (result.usdgReceived !== undefined) {
         deps.print(
@@ -161,6 +163,11 @@ export async function runExitCommand(
       deps.print(
         `${item.symbol} #${plan.position.tokenId}: exit failed — ${message}`,
       );
+      if (error instanceof ArcusTwapPartialFillError) {
+        deps.print(
+          `  ${error.completedChunks.length} of ${error.totalChunks} chunks already sold — do not retry blindly`,
+        );
+      }
     }
   }
   return outcomes;

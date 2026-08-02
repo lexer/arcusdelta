@@ -126,6 +126,8 @@ export function createContainer(config: Config): Container {
       closeSlippageBps: symbol.closeSlippageBps,
       sellSlippageBps: symbol.slippageBps,
       deadlineSeconds: symbol.mintDeadlineSeconds,
+      twapChunks: symbol.twapChunks,
+      twapIntervalSeconds: symbol.twapIntervalSeconds,
     });
   }
 

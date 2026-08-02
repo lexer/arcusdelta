@@ -62,6 +62,8 @@ async function main(): Promise<number> {
       stockTokenAddress: s.stockTokenAddress,
       usdgBuyAmount: s.usdgBuyAmount,
       slippageBps: s.slippageBps,
+      twapChunks: s.twapChunks,
+      twapIntervalSeconds: s.twapIntervalSeconds,
     }));
 
     const bought = await runBuyCommand({

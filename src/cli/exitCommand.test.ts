@@ -1,5 +1,6 @@
 import {describe, expect, it, vi} from 'vitest';
 import type {Hex} from 'viem';
+import {ArcusTwapPartialFillError} from '../arcus/errors.js';
 import type {TokenMeta} from '../uniswap/depositService.js';
 import type {ExitPlan} from '../uniswap/positionExitService.js';
 import type {OwnedPosition} from '../uniswap/positionReader.js';
@@ -63,7 +64,7 @@ function makeExitResult(position: OwnedPosition) {
     tokenId: position.tokenId,
     closeHash: '0xc105e' as Hex,
     stockSold: 77_971_818_932_109_303n,
-    saleTxHash: '0x5e11' as Hex,
+    saleTxHashes: ['0x5e11' as Hex],
     usdgReceived: '15400000',
   };
 }
@@ -358,5 +359,33 @@ describe('partial failure', () => {
       expect.objectContaining({symbol: 'NVDA', error: 'close reverted'}),
     );
     expect(outcomes).toContainEqual(expect.objectContaining({symbol: 'AAPL'}));
+  });
+
+  it('reports how many TWAP chunks already sold when a chunk fails mid-sequence', async () => {
+    const failing = makeItem('NVDA', NVDA, [NVDA_POSITION], {
+      exitService: {
+        plan: vi.fn((position: OwnedPosition) =>
+          Promise.resolve(makePlan(position)),
+        ),
+        exit: vi
+          .fn()
+          .mockRejectedValue(
+            new ArcusTwapPartialFillError(
+              'TWAP chunk 2 of 4 failed: router unavailable',
+              'trade-1',
+              [{txHash: '0x1', sellAmount: '20', buyAmount: '100'}],
+              2,
+              4,
+            ),
+          ),
+      },
+    });
+    const print = vi.fn();
+    const subject = deps({items: [failing], print});
+
+    await runExitCommand(subject);
+
+    const printed = print.mock.calls.map(call => call[0]).join('\n');
+    expect(printed).toContain('1 of 4 chunks already sold');
   });
 });

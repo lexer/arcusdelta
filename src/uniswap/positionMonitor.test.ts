@@ -201,7 +201,7 @@ function harness(options: HarnessOptions = {}) {
 
   const executeSell = vi
     .fn()
-    .mockResolvedValue({txHash: '0x5e11', buyAmount: '5000000'});
+    .mockResolvedValue({txHashes: ['0x5e11'], buyAmount: '5000000'});
 
   const logger = pino({level: 'silent'});
 
@@ -218,6 +218,8 @@ function harness(options: HarnessOptions = {}) {
       closeSlippageBps: 100,
       sellSlippageBps: 1,
       deadlineSeconds: 300,
+      twapChunks: 1,
+      twapIntervalSeconds: 10,
     });
   }
 

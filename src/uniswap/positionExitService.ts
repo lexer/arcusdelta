@@ -41,7 +41,8 @@ export interface ExitResult {
   readonly closeHash: Hex;
   /** Stock atoms sold afterwards; zero when the close returned none. */
   readonly stockSold: bigint;
-  readonly saleTxHash?: Hex;
+  /** One hash per TWAP chunk; a single-element array when TWAP is off. */
+  readonly saleTxHashes?: readonly Hex[];
   readonly usdgReceived?: string;
 }
 
@@ -57,6 +58,9 @@ export interface PositionExitServiceOptions {
   readonly closeSlippageBps: number;
   readonly sellSlippageBps: number;
   readonly deadlineSeconds: number;
+  /** Split the post-close sell into this many chunks. 1 disables TWAP. */
+  readonly twapChunks: number;
+  readonly twapIntervalSeconds: number;
 }
 
 export class PositionExitService {
@@ -156,14 +160,16 @@ export class PositionExitService {
       sellToken: stock.address,
       sellAmountAtoms: stockBalance,
       slippageBps: this.options.sellSlippageBps,
+      twapChunks: this.options.twapChunks,
+      twapIntervalSeconds: this.options.twapIntervalSeconds,
     });
-    log.info({txHash: sale.txHash}, 'exit complete');
+    log.info({txHashes: sale.txHashes}, 'exit complete');
 
     return {
       tokenId: plan.position.tokenId,
       closeHash: closeResult.hash,
       stockSold: stockBalance,
-      saleTxHash: sale.txHash,
+      saleTxHashes: sale.txHashes,
       usdgReceived: sale.buyAmount,
     };
   }

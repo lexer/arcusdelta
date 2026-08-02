@@ -72,7 +72,7 @@ function harness(options: HarnessOptions = {}) {
 
   const executeSell = vi
     .fn()
-    .mockResolvedValue({txHash: '0x5e11', buyAmount: '15400000'});
+    .mockResolvedValue({txHashes: ['0x5e11'], buyAmount: '15400000'});
 
   const serviceOptions: PositionExitServiceOptions = {
     wallet,
@@ -92,6 +92,8 @@ function harness(options: HarnessOptions = {}) {
     closeSlippageBps: 100,
     sellSlippageBps: 1,
     deadlineSeconds: 300,
+    twapChunks: 1,
+    twapIntervalSeconds: 10,
   };
 
   return {
@@ -145,7 +147,7 @@ describe('exit', () => {
       executeSell.mock.invocationCallOrder[0]!,
     );
     expect(result.closeHash).toBe('0xc105e');
-    expect(result.saleTxHash).toBe('0x5e11');
+    expect(result.saleTxHashes).toEqual(['0x5e11']);
   });
 
   it('simulates before broadcasting the burn', async () => {
@@ -188,7 +190,7 @@ describe('exit', () => {
 
     expect(executeSell).not.toHaveBeenCalled();
     expect(result.stockSold).toBe(0n);
-    expect(result.saleTxHash).toBeUndefined();
+    expect(result.saleTxHashes).toBeUndefined();
   });
 
   it('shares one trade id across the close and the sale', async () => {
@@ -199,6 +201,17 @@ describe('exit', () => {
 
     expect(executeSell).toHaveBeenCalledWith(
       expect.objectContaining({tradeId: 'trace-me'}),
+    );
+  });
+
+  it('passes the configured TWAP chunking into the sale', async () => {
+    const {service, executeSell} = harness();
+    const plan = await service.plan(POSITION, IN_RANGE);
+
+    await service.exit(plan);
+
+    expect(executeSell).toHaveBeenCalledWith(
+      expect.objectContaining({twapChunks: 1, twapIntervalSeconds: 10}),
     );
   });
 });

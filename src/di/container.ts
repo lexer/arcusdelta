@@ -17,9 +17,9 @@ import {createLogger} from '../logging/logger.js';
 import type {Logger} from '../logging/logger.js';
 import {PnlReporter} from '../pnl/pnlReporter.js';
 import {DepositService} from '../uniswap/depositService.js';
-import {createPoolKey} from '../uniswap/poolKey.js';
-import {createPoolReader} from '../uniswap/poolReader.js';
 import {createFeeReader} from '../uniswap/feeReader.js';
+import {resolvePoolIdentity} from '../uniswap/poolAddress.js';
+import {createPoolReader} from '../uniswap/poolReader.js';
 import {PositionExitService} from '../uniswap/positionExitService.js';
 import {PositionMonitor} from '../uniswap/positionMonitor.js';
 import {createPositionReader} from '../uniswap/positionReader.js';
@@ -57,70 +57,59 @@ export function createContainer(config: Config): Container {
     sellSymbol: SELL_SYMBOL,
   });
 
-  async function createDepositService(): Promise<DepositService> {
+  /** Resolves USDG/stock token metadata and the live v3 pool together. */
+  async function resolvePoolContext() {
     const [usdgToken, stockToken] = await Promise.all([
       tokens.bySymbol(SELL_SYMBOL),
       tokens.byAddress(config.stockTokenAddress),
     ]);
+    const usdg = {
+      address: usdgToken.address,
+      symbol: usdgToken.symbol,
+      decimals: usdgToken.decimals,
+    };
+    const stock = {
+      address: stockToken.address,
+      symbol: stockToken.symbol,
+      decimals: stockToken.decimals,
+    };
+    const pool = await resolvePoolIdentity(
+      wallet.getPublicClient(),
+      config.chainId,
+      usdg.address,
+      stock.address,
+      config.poolFee,
+    );
+    return {pool, usdg, stock};
+  }
+
+  async function createDepositService(): Promise<DepositService> {
+    const {usdg, stock} = await resolvePoolContext();
 
     return new DepositService({
       wallet,
-      poolReader: createPoolReader(wallet.getPublicClient(), config.chainId),
+      poolReader: createPoolReader(wallet.getPublicClient()),
       logger,
       chainId: config.chainId,
-      usdg: {
-        address: usdgToken.address,
-        symbol: usdgToken.symbol,
-        decimals: usdgToken.decimals,
-      },
-      stock: {
-        address: stockToken.address,
-        symbol: stockToken.symbol,
-        decimals: stockToken.decimals,
-      },
+      usdg,
+      stock,
       rangeDeviationPercent: config.rangeDeviationPercent,
       poolFee: config.poolFee,
-      poolTickSpacing: config.poolTickSpacing,
       lpSlippageBps: config.lpSlippageBps,
       mintDeadlineSeconds: config.mintDeadlineSeconds,
     });
   }
 
-  async function resolvePoolTokens() {
-    const [usdgToken, stockToken] = await Promise.all([
-      tokens.bySymbol(SELL_SYMBOL),
-      tokens.byAddress(config.stockTokenAddress),
-    ]);
-    return {
-      poolKey: createPoolKey(
-        usdgToken.address,
-        stockToken.address,
-        config.poolFee,
-        config.poolTickSpacing,
-      ),
-      usdg: {
-        address: usdgToken.address,
-        symbol: usdgToken.symbol,
-        decimals: usdgToken.decimals,
-      },
-      stock: {
-        address: stockToken.address,
-        symbol: stockToken.symbol,
-        decimals: stockToken.decimals,
-      },
-    };
-  }
-
   async function createExitService(): Promise<PositionExitService> {
-    const {poolKey, usdg, stock} = await resolvePoolTokens();
+    const {pool, usdg, stock} = await resolvePoolContext();
 
     return new PositionExitService({
       wallet,
-      feeReader: createFeeReader(wallet.getPublicClient(), config.chainId),
+      feeReader: createFeeReader(wallet.getPublicClient()),
       swapService,
       logger,
       chainId: config.chainId,
-      poolKey,
+      pool,
       usdg,
       stock,
       closeSlippageBps: config.closeSlippageBps,
@@ -130,20 +119,18 @@ export function createContainer(config: Config): Container {
   }
 
   async function createMonitor(dryRun: boolean): Promise<PositionMonitor> {
-    const {poolKey} = await resolvePoolTokens();
+    const {pool} = await resolvePoolContext();
 
     return new PositionMonitor({
       wallet,
-      poolReader: createPoolReader(wallet.getPublicClient(), config.chainId),
+      poolReader: createPoolReader(wallet.getPublicClient()),
       positionReader: createPositionReader(
         wallet.getPublicClient(),
         config.chainId,
-        config.positionLookbackBlocks,
-        logger,
       ),
       exitService: await createExitService(),
       logger,
-      poolKey,
+      pool,
       checkIntervalSeconds: config.poolCheckIntervalSeconds,
       exitConfirmations: config.exitConfirmations,
       dryRun,
@@ -151,39 +138,21 @@ export function createContainer(config: Config): Container {
   }
 
   async function createPnlReporter(): Promise<PnlReporter> {
-    const [usdgToken, stockToken] = await Promise.all([
-      tokens.bySymbol(SELL_SYMBOL),
-      tokens.byAddress(config.stockTokenAddress),
-    ]);
+    const {pool, usdg, stock} = await resolvePoolContext();
 
     return new PnlReporter({
       publicClient: wallet.getPublicClient(),
-      poolReader: createPoolReader(wallet.getPublicClient(), config.chainId),
+      poolReader: createPoolReader(wallet.getPublicClient()),
       positionReader: createPositionReader(
         wallet.getPublicClient(),
         config.chainId,
-        config.positionLookbackBlocks,
-        logger,
       ),
-      feeReader: createFeeReader(wallet.getPublicClient(), config.chainId),
+      feeReader: createFeeReader(wallet.getPublicClient()),
       logger,
       chainId: config.chainId,
-      poolKey: createPoolKey(
-        usdgToken.address,
-        stockToken.address,
-        config.poolFee,
-        config.poolTickSpacing,
-      ),
-      usdg: {
-        address: usdgToken.address,
-        symbol: usdgToken.symbol,
-        decimals: usdgToken.decimals,
-      },
-      stock: {
-        address: stockToken.address,
-        symbol: stockToken.symbol,
-        decimals: stockToken.decimals,
-      },
+      pool,
+      usdg,
+      stock,
     });
   }
 

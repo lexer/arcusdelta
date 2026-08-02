@@ -2,7 +2,7 @@ import {describe, expect, it, vi} from 'vitest';
 import {pino} from 'pino';
 import type {WalletProvider} from '../chain/walletProvider.js';
 import type {TokenMeta} from './depositService.js';
-import {createPoolKey} from './poolKey.js';
+import type {PoolIdentity} from './poolAddress.js';
 import {
   PositionExitService,
   type PositionExitServiceOptions,
@@ -29,6 +29,16 @@ const POSITION: OwnedPosition = {
   tickLower: 223080,
   tickUpper: 223740,
   liquidity: 60_210_398_382_745n,
+  feeGrowthInside0LastX128: 0n,
+  feeGrowthInside1LastX128: 0n,
+};
+
+const POOL: PoolIdentity = {
+  token0: USDG.address,
+  token1: NVDA.address,
+  fee: 3000,
+  tickSpacing: 60,
+  address: '0xB944cec30Bd4175855215D767ADC81F39e5f7E2B',
 };
 
 const IN_RANGE = getSqrtRatioAtTick(223447);
@@ -76,7 +86,7 @@ function harness(options: HarnessOptions = {}) {
     swapService: {executeSell},
     logger: pino({level: 'silent'}),
     chainId: 4663,
-    poolKey: createPoolKey(USDG.address, NVDA.address, 3000, 60),
+    pool: POOL,
     usdg: USDG,
     stock: NVDA,
     closeSlippageBps: 100,

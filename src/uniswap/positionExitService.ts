@@ -14,12 +14,12 @@ import type {Hex} from 'viem';
 import type {SpotSwapService} from '../arcus/spotSwapService.js';
 import type {WalletProvider} from '../chain/walletProvider.js';
 import type {Logger} from '../logging/logger.js';
-import {getV4Deployment} from './deployments.js';
+import {getV3Deployment} from './deployments.js';
 import type {TokenMeta} from './depositService.js';
+import {ERC20_ABI} from './erc20.js';
 import type {FeeReader} from './feeReader.js';
 import {getAmountsForLiquidity} from './liquidityMath.js';
-import {ERC20_ABI} from './permit2.js';
-import type {PoolKey} from './poolKey.js';
+import type {PoolIdentity} from './poolAddress.js';
 import {calculateMinimums, closePosition} from './positionCloser.js';
 import type {OwnedPosition} from './positionReader.js';
 import {getSqrtRatioAtTick} from './tickMath.js';
@@ -51,7 +51,7 @@ export interface PositionExitServiceOptions {
   readonly swapService: Pick<SpotSwapService, 'executeSell'>;
   readonly logger: Logger;
   readonly chainId: number;
-  readonly poolKey: PoolKey;
+  readonly pool: PoolIdentity;
   readonly usdg: TokenMeta;
   readonly stock: TokenMeta;
   readonly closeSlippageBps: number;
@@ -75,7 +75,7 @@ export class PositionExitService {
       position.liquidity,
     );
     const {fees0, fees1} = await this.options.feeReader.read(
-      this.options.poolKey,
+      this.options.pool,
       position,
     );
     const {amount0Min, amount1Min} = calculateMinimums(
@@ -100,7 +100,7 @@ export class PositionExitService {
     plan: ExitPlan,
     tradeId: string = randomUUID(),
   ): Promise<ExitResult> {
-    const {wallet, logger, chainId, stock, poolKey} = this.options;
+    const {wallet, logger, chainId, stock} = this.options;
     const owner = wallet.getAccount().address;
     const log = logger.child({
       tradeId,
@@ -111,12 +111,12 @@ export class PositionExitService {
       {
         publicClient: wallet.getPublicClient(),
         walletClient: wallet.getWalletClient(),
-        positionManager: getV4Deployment(chainId).positionManager,
+        positionManager: getV3Deployment(chainId).positionManager,
         logger: log,
       },
       {
         tokenId: plan.position.tokenId,
-        poolKey,
+        liquidity: plan.position.liquidity,
         amount0Min: plan.amount0Min,
         amount1Min: plan.amount1Min,
         recipient: owner,

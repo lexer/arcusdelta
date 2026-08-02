@@ -16,7 +16,7 @@ import {randomUUID} from 'node:crypto';
 import type {Hex} from 'viem';
 import type {WalletProvider} from '../chain/walletProvider.js';
 import type {Logger} from '../logging/logger.js';
-import type {PoolKey} from './poolKey.js';
+import type {PoolIdentity} from './poolAddress.js';
 import type {PoolReader} from './poolReader.js';
 import type {PositionExitService} from './positionExitService.js';
 import type {OwnedPosition, PositionReader} from './positionReader.js';
@@ -73,7 +73,7 @@ export interface PositionMonitorOptions {
   readonly positionReader: PositionReader;
   readonly exitService: PositionExitService;
   readonly logger: Logger;
-  readonly poolKey: PoolKey;
+  readonly pool: PoolIdentity;
   readonly checkIntervalSeconds: number;
   readonly exitConfirmations: number;
   /** When true, detect and report but never send a transaction. */
@@ -101,7 +101,7 @@ export class PositionMonitor {
   }
 
   async run(runOptions: MonitorRunOptions = {}): Promise<void> {
-    const {logger, poolKey, wallet} = this.options;
+    const {logger, pool, wallet} = this.options;
     const owner = wallet.getAccount().address;
 
     let positions = await this.loadPositions(runOptions.tokenId, owner);
@@ -133,7 +133,7 @@ export class PositionMonitor {
         await this.sleep(this.options.checkIntervalSeconds * 1000);
       }
 
-      const state = await this.options.poolReader.readState(poolKey);
+      const state = await this.options.poolReader.readState(pool);
       const remaining: OwnedPosition[] = [];
 
       for (const position of positions) {
@@ -182,13 +182,13 @@ export class PositionMonitor {
     tokenId: bigint | undefined,
     owner: Hex,
   ): Promise<OwnedPosition[]> {
-    const {positionReader, poolKey, logger} = this.options;
+    const {positionReader, pool, logger} = this.options;
 
     if (tokenId === undefined) {
-      return positionReader.discover(poolKey, owner);
+      return positionReader.discover(pool, owner);
     }
 
-    const position = await positionReader.read(tokenId, poolKey, owner);
+    const position = await positionReader.read(tokenId, pool, owner);
     if (!position) {
       logger.error(
         {tokenId: tokenId.toString()},

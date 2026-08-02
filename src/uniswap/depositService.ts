@@ -11,14 +11,18 @@
 import {formatUnits, type Hex, type PublicClient} from 'viem';
 import type {WalletProvider} from '../chain/walletProvider.js';
 import type {Logger} from '../logging/logger.js';
-import {getV4Deployment} from './deployments.js';
+import {ensureAllowance, ERC20_ABI} from './erc20.js';
+import {getV3Deployment} from './deployments.js';
 import {
   getAmountsForLiquidity,
   getLiquidityForAmount0,
   getLiquidityForAmount1,
 } from './liquidityMath.js';
-import {ensureAllowances, ERC20_ABI} from './permit2.js';
-import {createPoolKey, isCurrency0, type PoolKey} from './poolKey.js';
+import {
+  isToken0,
+  resolvePoolIdentity,
+  type PoolIdentity,
+} from './poolAddress.js';
 import type {PoolReader, PoolState} from './poolReader.js';
 import {mintPosition, type MintResult} from './positionManager.js';
 import {calculateRange} from './rangeCalculator.js';
@@ -46,16 +50,19 @@ export interface TokenMeta {
 }
 
 export interface DepositPlan {
-  readonly poolKey: PoolKey;
-  readonly poolId: Hex;
+  readonly pool: PoolIdentity;
   readonly currentTick: number;
   readonly tickLower: number;
   readonly tickUpper: number;
   readonly liquidity: bigint;
   readonly stockAmount: bigint;
   readonly usdgAmount: bigint;
-  readonly amount0Max: bigint;
-  readonly amount1Max: bigint;
+  /** Ceiling the mint may pull, computed amount plus `lpSlippageBps`. */
+  readonly amount0Desired: bigint;
+  readonly amount1Desired: bigint;
+  /** Floor the mint must return, computed amount minus `lpSlippageBps`. */
+  readonly amount0Min: bigint;
+  readonly amount1Min: bigint;
   readonly usdgBalance: bigint;
 }
 
@@ -73,7 +80,6 @@ export interface DepositServiceOptions {
   readonly stock: TokenMeta;
   readonly rangeDeviationPercent: number;
   readonly poolFee: number;
-  readonly poolTickSpacing: number;
   readonly lpSlippageBps: number;
   readonly mintDeadlineSeconds: number;
 }
@@ -88,28 +94,29 @@ export class DepositService {
 
   /** Read-only. Computes exactly what {@link execute} would do. */
   async plan(): Promise<DepositPlan> {
-    const {wallet, poolReader, logger, usdg, stock} = this.options;
+    const {wallet, poolReader, logger, usdg, stock, chainId} = this.options;
     const owner = wallet.getAccount().address;
     const client = wallet.getPublicClient();
 
-    const poolKey = createPoolKey(
+    const pool = await resolvePoolIdentity(
+      client,
+      chainId,
       usdg.address,
       stock.address,
       this.options.poolFee,
-      this.options.poolTickSpacing,
     );
 
     const [poolState, stockBalance, usdgBalance] = await Promise.all([
-      poolReader.readState(poolKey),
+      poolReader.readState(pool),
       readBalance(client, stock.address, owner),
       readBalance(client, usdg.address, owner),
     ]);
 
     logger.info(
       {
-        poolId: poolState.poolId,
+        poolAddress: pool.address,
         tick: poolState.tick,
-        lpFee: poolState.lpFee,
+        tickSpacing: pool.tickSpacing,
         poolLiquidity: poolState.liquidity.toString(),
         stockBalance: stockBalance.toString(),
         usdgBalance: usdgBalance.toString(),
@@ -124,11 +131,11 @@ export class DepositService {
     const {tickLower, tickUpper} = calculateRange(
       poolState.tick,
       this.options.rangeDeviationPercent,
-      this.options.poolTickSpacing,
+      pool.tickSpacing,
     );
 
     const plan = this.buildPlan(
-      poolKey,
+      pool,
       poolState,
       tickLower,
       tickUpper,
@@ -143,8 +150,8 @@ export class DepositService {
         liquidity: plan.liquidity.toString(),
         stockAmount: plan.stockAmount.toString(),
         usdgAmount: plan.usdgAmount.toString(),
-        amount0Max: plan.amount0Max.toString(),
-        amount1Max: plan.amount1Max.toString(),
+        amount0Desired: plan.amount0Desired.toString(),
+        amount1Desired: plan.amount1Desired.toString(),
       },
       'planned position',
     );
@@ -164,41 +171,47 @@ export class DepositService {
   /** Sends approvals if needed, then mints. Spends real funds. */
   async execute(plan: DepositPlan): Promise<DepositResult> {
     const {wallet, logger, chainId, usdg, stock} = this.options;
-    const deployment = getV4Deployment(chainId);
+    const positionManager = getV3Deployment(chainId).positionManager;
     const owner = wallet.getAccount().address;
 
     const approvalContext = {
       publicClient: wallet.getPublicClient(),
       walletClient: wallet.getWalletClient(),
       owner,
-      permit2: deployment.permit2,
-      spender: deployment.positionManager,
+      spender: positionManager,
       logger,
     };
 
-    const stockIsCurrency0 = isCurrency0(plan.poolKey, stock.address);
-    const stockMax = stockIsCurrency0 ? plan.amount0Max : plan.amount1Max;
-    const usdgMax = stockIsCurrency0 ? plan.amount1Max : plan.amount0Max;
+    const stockIsToken0 = isToken0(plan.pool, stock.address);
+    const stockDesired = stockIsToken0
+      ? plan.amount0Desired
+      : plan.amount1Desired;
+    const usdgDesired = stockIsToken0
+      ? plan.amount1Desired
+      : plan.amount0Desired;
 
-    const approvalHashes = [
-      ...(await ensureAllowances(approvalContext, usdg.address, usdgMax)),
-      ...(await ensureAllowances(approvalContext, stock.address, stockMax)),
-    ];
+    const approvalHashes = (
+      await Promise.all([
+        ensureAllowance(approvalContext, usdg.address, usdgDesired),
+        ensureAllowance(approvalContext, stock.address, stockDesired),
+      ])
+    ).filter((hash): hash is Hex => hash !== undefined);
 
     const result = await mintPosition(
       {
         publicClient: wallet.getPublicClient(),
         walletClient: wallet.getWalletClient(),
-        positionManager: deployment.positionManager,
+        positionManager,
         logger,
       },
       {
-        poolKey: plan.poolKey,
+        pool: plan.pool,
         tickLower: plan.tickLower,
         tickUpper: plan.tickUpper,
-        liquidity: plan.liquidity,
-        amount0Max: plan.amount0Max,
-        amount1Max: plan.amount1Max,
+        amount0Desired: plan.amount0Desired,
+        amount1Desired: plan.amount1Desired,
+        amount0Min: plan.amount0Min,
+        amount1Min: plan.amount1Min,
         recipient: owner,
       },
       this.options.mintDeadlineSeconds,
@@ -208,7 +221,7 @@ export class DepositService {
   }
 
   private buildPlan(
-    poolKey: PoolKey,
+    pool: PoolIdentity,
     poolState: PoolState,
     tickLower: number,
     tickUpper: number,
@@ -219,11 +232,11 @@ export class DepositService {
     const sqrtUpper = getSqrtRatioAtTick(tickUpper);
     const sqrtCurrent = poolState.sqrtPriceX96;
 
-    const stockIsCurrency0 = isCurrency0(poolKey, this.options.stock.address);
+    const stockIsToken0 = isToken0(pool, this.options.stock.address);
 
     // The stock balance is the fixed side; derive the liquidity it supports,
     // then the counter-token that liquidity requires.
-    const liquidity = stockIsCurrency0
+    const liquidity = stockIsToken0
       ? getLiquidityForAmount0(
           sqrtCurrent > sqrtLower ? sqrtCurrent : sqrtLower,
           sqrtUpper,
@@ -249,28 +262,37 @@ export class DepositService {
       liquidity,
     );
 
-    const amount0Max = withSlippage(amount0, this.options.lpSlippageBps);
-    const amount1Max = withSlippage(amount1, this.options.lpSlippageBps);
+    const bps = this.options.lpSlippageBps;
+    const amount0Desired = withHeadroom(amount0, bps);
+    const amount1Desired = withHeadroom(amount1, bps);
+    const amount0Min = withFloor(amount0, bps);
+    const amount1Min = withFloor(amount1, bps);
 
     return {
-      poolKey,
-      poolId: poolState.poolId,
+      pool,
       currentTick: poolState.tick,
       tickLower,
       tickUpper,
       liquidity,
-      stockAmount: stockIsCurrency0 ? amount0 : amount1,
-      usdgAmount: stockIsCurrency0 ? amount1 : amount0,
-      amount0Max,
-      amount1Max,
+      stockAmount: stockIsToken0 ? amount0 : amount1,
+      usdgAmount: stockIsToken0 ? amount1 : amount0,
+      amount0Desired,
+      amount1Desired,
+      amount0Min,
+      amount1Min,
       usdgBalance,
     };
   }
 }
 
-/** Headroom on the amount the mint may pull, guarding against a tick move. */
-function withSlippage(amount: bigint, bps: number): bigint {
+/** Ceiling the mint may pull, guarding against a tick move before it lands. */
+function withHeadroom(amount: bigint, bps: number): bigint {
   return (amount * BigInt(10_000 + bps)) / 10_000n;
+}
+
+/** Floor the mint must return, guarding against a sandwiched fill. */
+function withFloor(amount: bigint, bps: number): bigint {
+  return (amount * BigInt(10_000 - bps)) / 10_000n;
 }
 
 async function readBalance(

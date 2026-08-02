@@ -17,6 +17,8 @@ const position: OwnedPosition = {
   tickLower: 218880,
   tickUpper: 219180,
   liquidity: 196_440_212_530_173_869n,
+  feeGrowthInside0LastX128: 0n,
+  feeGrowthInside1LastX128: 0n,
 };
 
 const params: CloseParams = {

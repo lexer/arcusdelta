@@ -2,7 +2,7 @@ import {describe, expect, it, vi} from 'vitest';
 import {pino} from 'pino';
 import type {WalletProvider} from '../chain/walletProvider.js';
 import type {TokenMeta} from './depositService.js';
-import {createPoolKey} from './poolKey.js';
+import type {PoolIdentity} from './poolAddress.js';
 import type {PoolState} from './poolReader.js';
 import {
   BreachCounter,
@@ -34,6 +34,16 @@ const POSITION: OwnedPosition = {
   tickLower: 223080,
   tickUpper: 223740,
   liquidity: 60_210_398_382_745n,
+  feeGrowthInside0LastX128: 0n,
+  feeGrowthInside1LastX128: 0n,
+};
+
+const POOL: PoolIdentity = {
+  token0: USDG.address,
+  token1: NVDA.address,
+  fee: 3000,
+  tickSpacing: 60,
+  address: '0xB944cec30Bd4175855215D767ADC81F39e5f7E2B',
 };
 
 describe('classifyTick', () => {
@@ -119,10 +129,9 @@ function harness(options: HarnessOptions = {}) {
     const tick = ticks[Math.min(poll, ticks.length - 1)]!;
     poll++;
     return Promise.resolve({
-      poolId: `0x${'3b'.repeat(32)}`,
+      poolAddress: POOL.address,
       sqrtPriceX96: getSqrtRatioAtTick(tick),
       tick,
-      lpFee: 3000,
       liquidity: 817_184_618_165_972_105n,
     } satisfies PoolState);
   });
@@ -153,7 +162,6 @@ function harness(options: HarnessOptions = {}) {
     .fn()
     .mockResolvedValue({txHash: '0x5e11', buyAmount: '5000000'});
 
-  const poolKey = createPoolKey(USDG.address, NVDA.address, 3000, 60);
   const logger = pino({level: 'silent'});
 
   // A real exit service over fake clients, so the assertions below still
@@ -164,7 +172,7 @@ function harness(options: HarnessOptions = {}) {
     swapService: {executeSell} as never,
     logger,
     chainId: 4663,
-    poolKey,
+    pool: POOL,
     usdg: USDG,
     stock: NVDA,
     closeSlippageBps: 100,
@@ -181,7 +189,7 @@ function harness(options: HarnessOptions = {}) {
     },
     exitService,
     logger,
-    poolKey,
+    pool: POOL,
     checkIntervalSeconds: 30,
     exitConfirmations: 3,
     dryRun: options.dryRun ?? false,

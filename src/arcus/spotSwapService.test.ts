@@ -12,6 +12,8 @@ import {
   ArcusPollTimeoutError,
   ArcusQuoteError,
   ArcusSubmissionError,
+  ArcusTwapConfigError,
+  ArcusTwapPartialFillError,
   QuoteValidationError,
 } from './errors.js';
 import {SpotSwapService, type SpotRouter} from './spotSwapService.js';
@@ -169,7 +171,7 @@ describe('executeBuy happy path', () => {
 
     expect(result).toMatchObject({
       tradeId: 'trade-1',
-      txHash: TX_HASH,
+      txHashes: [TX_HASH],
       orderId: ORDER_ID,
       sellAmount: SELL_ATOMS,
       minBuyAmount: '499000000000000000',
@@ -262,7 +264,7 @@ describe('executeSell', () => {
     const result = await service.executeSell(sellRequest);
 
     expect(result.sellAmount).toBe(SELL_STOCK_ATOMS.toString());
-    expect(result.txHash).toBe(TX_HASH);
+    expect(result.txHashes).toEqual([TX_HASH]);
   });
 
   it('runs the same permit and sign path as a buy', async () => {
@@ -451,7 +453,7 @@ describe('reconciliation after a submission failure', () => {
     const result = await service.executeBuy(request);
 
     expect(result).toMatchObject({
-      txHash: RECONCILED_TX,
+      txHashes: [RECONCILED_TX],
       orderId: undefined,
       buyAmount: '495000000000000000',
     });
@@ -481,7 +483,7 @@ describe('reconciliation after a submission failure', () => {
 
     const result = await service.executeBuy(request);
 
-    expect(result.txHash).toBe(RECONCILED_TX);
+    expect(result.txHashes).toEqual([RECONCILED_TX]);
     // The quote fixture's buyAmount — nothing on chain confirms the real one.
     expect(result.buyAmount).toBe('500000000000000000');
   });
@@ -500,6 +502,176 @@ describe('reconciliation after a submission failure', () => {
 
     await expect(service.executeBuy(request)).rejects.toThrow(
       ArcusSubmissionError,
+    );
+  });
+});
+
+describe('TWAP chunking', () => {
+  /** Echoes back a quote for whatever sellAmount was actually requested, at a fixed 5:1 rate. */
+  function twapQuoteRouter(router: Harness['router']) {
+    router.getQuote.mockImplementation(req =>
+      Promise.resolve({
+        recommended: 'arcus',
+        all: [
+          makeQuote({
+            sellAmount: req.sellAmount,
+            buyAmount: (BigInt(req.sellAmount) * 5n).toString(),
+            arcus: {minAmountOut: (BigInt(req.sellAmount) * 4n).toString()},
+          }),
+        ],
+      }),
+    );
+  }
+
+  const CHUNK_TX = [
+    `0x${'11'.repeat(32)}`,
+    `0x${'22'.repeat(32)}`,
+    `0x${'33'.repeat(32)}`,
+  ] as const;
+
+  it('splits into the requested chunk count, remainder in the last one, sleeping between but not after', async () => {
+    const {service, router, sleep} = harness(
+      ['confirmed', 'confirmed', 'confirmed'],
+      makePublicClient(),
+    );
+    twapQuoteRouter(router);
+    router.submitSignedQuote
+      .mockResolvedValueOnce({
+        venue: 'arcus',
+        txHash: CHUNK_TX[0],
+        status: 'submitted',
+        orderId: ORDER_ID,
+      })
+      .mockResolvedValueOnce({
+        venue: 'arcus',
+        txHash: CHUNK_TX[1],
+        status: 'submitted',
+        orderId: ORDER_ID,
+      })
+      .mockResolvedValueOnce({
+        venue: 'arcus',
+        txHash: CHUNK_TX[2],
+        status: 'submitted',
+        orderId: ORDER_ID,
+      });
+
+    const result = await service.executeBuy({
+      ...request,
+      twapChunks: 3,
+      twapIntervalSeconds: 5,
+    });
+
+    const requestedAmounts = router.getQuote.mock.calls.map(
+      call => call[0].sellAmount,
+    );
+    expect(requestedAmounts).toEqual(['33333333', '33333333', '33333334']);
+    expect(requestedAmounts.reduce((sum, a) => sum + BigInt(a), 0n)).toBe(
+      BigInt(SELL_ATOMS),
+    );
+
+    expect(result.txHashes).toEqual(CHUNK_TX);
+    expect(result.orderId).toBeUndefined();
+    expect(result.sellAmount).toBe(SELL_ATOMS);
+    expect(result.buyAmount).toBe((BigInt(SELL_ATOMS) * 5n).toString());
+    expect(result.minBuyAmount).toBe((BigInt(SELL_ATOMS) * 4n).toString());
+
+    // Between chunks 1-2 and 2-3, never after the last.
+    expect(sleep).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(5_000);
+  });
+
+  it('behaves identically to an un-chunked trade when twapChunks is 1', async () => {
+    const {service, router} = harness();
+
+    const result = await service.executeBuy({...request, twapChunks: 1});
+
+    expect(router.getQuote).toHaveBeenCalledOnce();
+    expect(result.txHashes).toEqual([TX_HASH]);
+  });
+
+  it('throws a partial-fill error carrying exactly what settled when a later chunk fails', async () => {
+    const {service, router, sleep} = harness(
+      ['confirmed', 'confirmed'],
+      makePublicClient(),
+    );
+    twapQuoteRouter(router);
+    router.submitSignedQuote
+      .mockResolvedValueOnce({
+        venue: 'arcus',
+        txHash: CHUNK_TX[0],
+        status: 'submitted',
+        orderId: ORDER_ID,
+      })
+      .mockResolvedValueOnce({
+        venue: 'arcus',
+        txHash: CHUNK_TX[1],
+        status: 'submitted',
+        orderId: ORDER_ID,
+      })
+      .mockRejectedValueOnce(new Error('router unavailable'));
+
+    const failure = await service
+      .executeBuy({...request, twapChunks: 3, twapIntervalSeconds: 5})
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ArcusTwapPartialFillError);
+    const error = failure as ArcusTwapPartialFillError;
+    expect(error.failedChunk).toBe(3);
+    expect(error.totalChunks).toBe(3);
+    expect(error.completedChunks).toHaveLength(2);
+    expect(error.completedChunks.map(c => c.txHash)).toEqual([
+      CHUNK_TX[0],
+      CHUNK_TX[1],
+    ]);
+    // Slept after chunk 1 and chunk 2; the failed chunk 3 has nothing after it to wait for.
+    expect(sleep).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a chunk count that would leave a chunk at zero atoms, before any quote is requested', async () => {
+    const {service, router} = harness();
+
+    await expect(
+      service.executeBuy({
+        ...request,
+        sellAmount: '0.000001',
+        twapChunks: 5,
+      }),
+    ).rejects.toThrow(ArcusTwapConfigError);
+    expect(router.getQuote).not.toHaveBeenCalled();
+  });
+
+  it('chunks a sell the same way as a buy', async () => {
+    const {service, router} = harness(['confirmed', 'confirmed']);
+    twapQuoteRouter(router);
+    router.submitSignedQuote
+      .mockResolvedValueOnce({
+        venue: 'arcus',
+        txHash: CHUNK_TX[0],
+        status: 'submitted',
+        orderId: ORDER_ID,
+      })
+      .mockResolvedValueOnce({
+        venue: 'arcus',
+        txHash: CHUNK_TX[1],
+        status: 'submitted',
+        orderId: ORDER_ID,
+      });
+
+    const result = await service.executeSell({
+      tradeId: 'sell-twap',
+      sellToken: NVDA.address,
+      sellAmountAtoms: 500_000_000_000_000_000n,
+      slippageBps: 1,
+      twapChunks: 2,
+      twapIntervalSeconds: 5,
+    });
+
+    expect(result.txHashes).toEqual([CHUNK_TX[0], CHUNK_TX[1]]);
+    const requestedAmounts = router.getQuote.mock.calls.map(
+      call => call[0].sellAmount,
+    );
+    expect(requestedAmounts.reduce((sum, a) => sum + BigInt(a), 0n)).toBe(
+      500_000_000_000_000_000n,
     );
   });
 });

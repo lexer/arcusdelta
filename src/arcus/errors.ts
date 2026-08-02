@@ -79,3 +79,38 @@ export class ArcusPollTimeoutError extends ArcusError {
     this.txHash = txHash;
   }
 }
+
+/** A TWAP chunk count that cannot be satisfied by the trade size (a chunk would be zero atoms). Nothing was signed. */
+export class ArcusTwapConfigError extends ArcusError {}
+
+/** One TWAP hash, kept minimal since the full result already carries everything else per chunk. */
+export interface TwapChunkFill {
+  readonly txHash: Hex;
+  readonly sellAmount: string;
+  readonly buyAmount: string;
+}
+
+/**
+ * A TWAP chunk failed after earlier chunks already settled — real funds
+ * already moved for those. `completedChunks` is exactly what filled, so the
+ * caller can report it precisely instead of a generic failure that could be
+ * misread as "nothing happened".
+ */
+export class ArcusTwapPartialFillError extends ArcusError {
+  readonly completedChunks: readonly TwapChunkFill[];
+  readonly failedChunk: number;
+  readonly totalChunks: number;
+
+  constructor(
+    message: string,
+    tradeId: string,
+    completedChunks: readonly TwapChunkFill[],
+    failedChunk: number,
+    totalChunks: number,
+  ) {
+    super(message, tradeId);
+    this.completedChunks = completedChunks;
+    this.failedChunk = failedChunk;
+    this.totalChunks = totalChunks;
+  }
+}

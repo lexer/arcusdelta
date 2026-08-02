@@ -29,6 +29,8 @@ import {
   ArcusQuoteError,
   ArcusSubmissionError,
   ArcusPermitError,
+  ArcusTwapConfigError,
+  ArcusTwapPartialFillError,
   QuoteValidationError,
 } from './errors.js';
 import type {TokenResolver} from './tokenResolver.js';
@@ -54,6 +56,32 @@ function divideForDisplay(numerator: string, denominator: string): string {
   const value = Number(numerator) / Number(denominator);
   if (!Number.isFinite(value)) return 'n/a';
   return value.toFixed(4);
+}
+
+/**
+ * Splits `total` into `chunks` pieces, every one but the last getting
+ * `floor(total / chunks)` and the last taking the remainder — so the sum is
+ * always exactly `total`, with no dust lost to rounding.
+ */
+function splitIntoChunks(total: bigint, chunks: number): bigint[] {
+  const base = total / BigInt(chunks);
+  const amounts = new Array<bigint>(chunks - 1).fill(base);
+  amounts.push(total - base * BigInt(chunks - 1));
+  return amounts;
+}
+
+/** Sums atomic-unit decimal strings without going through floating point. */
+function sumAtoms(amounts: readonly string[]): string {
+  return amounts.reduce((sum, amount) => sum + BigInt(amount), 0n).toString();
+}
+
+/** One chunk's settled trade — the same shape a single, un-chunked trade returns. */
+interface SingleTradeResult {
+  readonly txHash: Hex;
+  readonly orderId: Hex | undefined;
+  readonly sellAmount: string;
+  readonly buyAmount: string;
+  readonly minBuyAmount: string;
 }
 
 /** The subset of SpotRouterClient this service depends on. */
@@ -138,21 +166,38 @@ export class SpotSwapService {
   async executeBuy(request: BuyRequest): Promise<BuyResult> {
     const log = this.logger.child({tradeId: request.tradeId});
     const startedAt = Date.now();
+    const chunks = request.twapChunks ?? 1;
     log.info(
       {
         buyToken: request.buyToken,
         sellAmount: request.sellAmount,
         slippageBps: request.slippageBps,
+        twapChunks: chunks,
       },
       'buy started',
     );
 
-    const {quote, sellToken, buyToken} = await this.prepare(request, log);
-    const result = await this.settle(
-      quote,
+    const {sellToken, buyToken} = await this.resolveTokens(request.buyToken);
+    const sellAmountAtoms = parseUnits(request.sellAmount, sellToken.decimals);
+    log.info(
+      {
+        sellToken: sellToken.address,
+        sellDecimals: sellToken.decimals,
+        buyToken: buyToken.address,
+        buySymbol: buyToken.symbol,
+        sellAmountAtoms: sellAmountAtoms.toString(),
+      },
+      'tokens resolved',
+    );
+
+    const result = await this.executeWithTwap(
       request.tradeId,
-      sellToken.address,
-      buyToken.address,
+      sellToken,
+      buyToken,
+      sellAmountAtoms,
+      request.slippageBps,
+      chunks,
+      request.twapIntervalSeconds ?? 0,
       log,
     );
 
@@ -169,37 +214,168 @@ export class SpotSwapService {
   async executeSell(request: SellRequest): Promise<BuyResult> {
     const log = this.logger.child({tradeId: request.tradeId});
     const startedAt = Date.now();
+    const chunks = request.twapChunks ?? 1;
     log.info(
       {
         sellToken: request.sellToken,
         sellAmountAtoms: request.sellAmountAtoms.toString(),
         slippageBps: request.slippageBps,
+        twapChunks: chunks,
       },
       'sell started',
     );
 
     const sellToken = await this.tokens.byAddress(request.sellToken);
     const buyToken = await this.tokens.bySymbol(this.sellSymbol);
-    const sellAmountAtoms = request.sellAmountAtoms.toString();
 
-    const quote = await this.quoteAndValidate(
+    const result = await this.executeWithTwap(
       request.tradeId,
       sellToken,
       buyToken,
-      sellAmountAtoms,
+      request.sellAmountAtoms,
       request.slippageBps,
-      log,
-    );
-    const result = await this.settle(
-      quote,
-      request.tradeId,
-      sellToken.address,
-      buyToken.address,
+      chunks,
+      request.twapIntervalSeconds ?? 0,
       log,
     );
 
     log.info({...result, elapsedMs: Date.now() - startedAt}, 'sell completed');
     return result;
+  }
+
+  private async resolveTokens(
+    buyTokenAddress: Hex,
+  ): Promise<{sellToken: TokenInfo; buyToken: TokenInfo}> {
+    const [sellToken, buyToken] = await Promise.all([
+      this.tokens.bySymbol(this.sellSymbol),
+      this.tokens.byAddress(buyTokenAddress),
+    ]);
+    return {sellToken, buyToken};
+  }
+
+  /** Quote, validate, and settle exactly one trade of `sellAmountAtoms`. */
+  private async executeSingle(
+    tradeId: string,
+    sellToken: TokenInfo,
+    buyToken: TokenInfo,
+    sellAmountAtoms: string,
+    slippageBps: number,
+    log: Logger,
+  ): Promise<SingleTradeResult> {
+    const quote = await this.quoteAndValidate(
+      tradeId,
+      sellToken,
+      buyToken,
+      sellAmountAtoms,
+      slippageBps,
+      log,
+    );
+    return this.settle(
+      quote,
+      tradeId,
+      sellToken.address,
+      buyToken.address,
+      log,
+    );
+  }
+
+  /**
+   * `chunks <= 1` runs exactly the single-trade path that predates TWAP —
+   * same logging, same errors, byte-for-byte. `chunks > 1` splits the total
+   * into that many pieces (see {@link splitIntoChunks}), quoting and settling
+   * each one in sequence with its own quote, `twapIntervalSeconds` apart. A
+   * chunk failing after earlier ones already settled throws
+   * {@link ArcusTwapPartialFillError} carrying exactly what filled — the
+   * caller must never be left assuming nothing happened when it did.
+   */
+  private async executeWithTwap(
+    tradeId: string,
+    sellToken: TokenInfo,
+    buyToken: TokenInfo,
+    totalSellAmountAtoms: bigint,
+    slippageBps: number,
+    chunks: number,
+    intervalSeconds: number,
+    log: Logger,
+  ): Promise<BuyResult> {
+    if (chunks <= 1) {
+      const result = await this.executeSingle(
+        tradeId,
+        sellToken,
+        buyToken,
+        totalSellAmountAtoms.toString(),
+        slippageBps,
+        log,
+      );
+      return {
+        tradeId,
+        txHashes: [result.txHash],
+        orderId: result.orderId,
+        sellAmount: result.sellAmount,
+        buyAmount: result.buyAmount,
+        minBuyAmount: result.minBuyAmount,
+      };
+    }
+
+    const chunkAmounts = splitIntoChunks(totalSellAmountAtoms, chunks);
+    if (chunkAmounts.some(amount => amount === 0n)) {
+      throw new ArcusTwapConfigError(
+        `twapChunks=${chunks} is too many for a trade of ${totalSellAmountAtoms} atoms of ${sellToken.symbol} — at least one chunk would be zero`,
+        tradeId,
+      );
+    }
+
+    const completed: SingleTradeResult[] = [];
+    for (let i = 0; i < chunkAmounts.length; i++) {
+      const chunkNumber = i + 1;
+      const chunkTradeId = `${tradeId}-${chunkNumber}`;
+      const chunkLog = log.child({twapChunk: chunkNumber, twapChunks: chunks});
+      chunkLog.info(
+        {sellAmountAtoms: chunkAmounts[i]!.toString()},
+        'twap chunk started',
+      );
+
+      try {
+        const result = await this.executeSingle(
+          chunkTradeId,
+          sellToken,
+          buyToken,
+          chunkAmounts[i]!.toString(),
+          slippageBps,
+          chunkLog,
+        );
+        completed.push(result);
+        chunkLog.info({...result}, 'twap chunk settled');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        chunkLog.error(
+          {error: message, completedChunks: completed.length},
+          'twap chunk failed',
+        );
+        throw new ArcusTwapPartialFillError(
+          `TWAP chunk ${chunkNumber} of ${chunks} failed: ${message}`,
+          tradeId,
+          completed.map(chunk => ({
+            txHash: chunk.txHash,
+            sellAmount: chunk.sellAmount,
+            buyAmount: chunk.buyAmount,
+          })),
+          chunkNumber,
+          chunks,
+        );
+      }
+
+      if (chunkNumber < chunks) await this.sleep(intervalSeconds * 1000);
+    }
+
+    return {
+      tradeId,
+      txHashes: completed.map(chunk => chunk.txHash),
+      orderId: undefined,
+      sellAmount: sumAtoms(completed.map(chunk => chunk.sellAmount)),
+      buyAmount: sumAtoms(completed.map(chunk => chunk.buyAmount)),
+      minBuyAmount: sumAtoms(completed.map(chunk => chunk.minBuyAmount)),
+    };
   }
 
   /**
@@ -212,7 +388,7 @@ export class SpotSwapService {
     sellToken: Hex,
     buyToken: Hex,
     log: Logger,
-  ): Promise<BuyResult> {
+  ): Promise<SingleTradeResult> {
     const permit = await this.buildPermit(quote, tradeId, log);
 
     log.info('signing quote');
@@ -241,7 +417,6 @@ export class SpotSwapService {
       if (!reconciled) throw error;
 
       return {
-        tradeId,
         txHash: reconciled.txHash,
         orderId: undefined,
         sellAmount: quote.sellAmount,
@@ -261,7 +436,6 @@ export class SpotSwapService {
     );
 
     return {
-      tradeId,
       txHash: submission.txHash,
       orderId,
       sellAmount: quote.sellAmount,

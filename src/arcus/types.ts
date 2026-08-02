@@ -12,6 +12,10 @@ export interface BuyRequest {
   readonly sellAmount: string;
   /** Slippage tolerance in basis points. 1 bps = 0.01%. */
   readonly slippageBps: number;
+  /** Split into this many chunks, each with its own quote. Omitted or <= 1 disables TWAP. */
+  readonly twapChunks?: number;
+  /** Delay between chunks. Only meaningful when twapChunks > 1. */
+  readonly twapIntervalSeconds?: number;
 }
 
 /**
@@ -25,6 +29,10 @@ export interface SellRequest {
   readonly sellToken: Hex;
   readonly sellAmountAtoms: bigint;
   readonly slippageBps: number;
+  /** Split into this many chunks, each with its own quote. Omitted or <= 1 disables TWAP. */
+  readonly twapChunks?: number;
+  /** Delay between chunks. Only meaningful when twapChunks > 1. */
+  readonly twapIntervalSeconds?: number;
 }
 
 /** What a buy would do right now, in human units. Nothing is committed. */
@@ -45,12 +53,14 @@ export interface QuotePreview {
 
 export interface BuyResult {
   readonly tradeId: string;
-  readonly txHash: Hex;
+  /** One hash per chunk executed; a single-element array when TWAP is off. */
+  readonly txHashes: readonly Hex[];
+  /** Only meaningful for a single-chunk trade; undefined when chunked. */
   readonly orderId: Hex | undefined;
-  /** Atomic units of the sell token actually committed. */
+  /** Atomic units of the sell token actually committed, summed across chunks. */
   readonly sellAmount: string;
-  /** Atomic units of the buy token quoted. */
+  /** Atomic units of the buy token received, summed across chunks. */
   readonly buyAmount: string;
-  /** Atomic units of the buy token guaranteed by the quote's slippage bound. */
+  /** Atomic units of the buy token guaranteed, summed across chunks. */
   readonly minBuyAmount: string;
 }

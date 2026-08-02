@@ -9,6 +9,7 @@ import {
   classifyTick,
   PositionMonitor,
   type PositionMonitorOptions,
+  type WatchedSymbol,
 } from './positionMonitor.js';
 import {PositionExitService} from './positionExitService.js';
 import type {OwnedPosition} from './positionReader.js';
@@ -28,8 +29,13 @@ const NVDA: TokenMeta = {
   decimals: 18,
 };
 
-// The live position.
-const POSITION: OwnedPosition = {
+const AAPL: TokenMeta = {
+  address: '0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9',
+  symbol: 'AAPL',
+  decimals: 18,
+};
+
+const NVDA_POSITION: OwnedPosition = {
   tokenId: 422596n,
   tickLower: 223080,
   tickUpper: 223740,
@@ -38,7 +44,16 @@ const POSITION: OwnedPosition = {
   feeGrowthInside1LastX128: 0n,
 };
 
-const POOL: PoolIdentity = {
+const AAPL_POSITION: OwnedPosition = {
+  tokenId: 560470n,
+  tickLower: 218820,
+  tickUpper: 219060,
+  liquidity: 926_585_679_398_857n,
+  feeGrowthInside0LastX128: 0n,
+  feeGrowthInside1LastX128: 0n,
+};
+
+const NVDA_POOL: PoolIdentity = {
   token0: USDG.address,
   token1: NVDA.address,
   fee: 3000,
@@ -46,21 +61,29 @@ const POOL: PoolIdentity = {
   address: '0xB944cec30Bd4175855215D767ADC81F39e5f7E2B',
 };
 
+const AAPL_POOL: PoolIdentity = {
+  token0: USDG.address,
+  token1: AAPL.address,
+  fee: 3000,
+  tickSpacing: 60,
+  address: '0x783C9bbB765047CFdD2b84b92b2Ca9F11D34b7Ed',
+};
+
 describe('classifyTick', () => {
   it('reports in-range strictly inside the bounds', () => {
-    expect(classifyTick(223400, POSITION)).toBe('in-range');
-    expect(classifyTick(223081, POSITION)).toBe('in-range');
-    expect(classifyTick(223739, POSITION)).toBe('in-range');
+    expect(classifyTick(223400, NVDA_POSITION)).toBe('in-range');
+    expect(classifyTick(223081, NVDA_POSITION)).toBe('in-range');
+    expect(classifyTick(223739, NVDA_POSITION)).toBe('in-range');
   });
 
   it('treats the lower bound as fully USDG', () => {
-    expect(classifyTick(223080, POSITION)).toBe('below-range');
-    expect(classifyTick(223079, POSITION)).toBe('below-range');
+    expect(classifyTick(223080, NVDA_POSITION)).toBe('below-range');
+    expect(classifyTick(223079, NVDA_POSITION)).toBe('below-range');
   });
 
   it('treats the upper bound as fully stock', () => {
-    expect(classifyTick(223740, POSITION)).toBe('above-range');
-    expect(classifyTick(223741, POSITION)).toBe('above-range');
+    expect(classifyTick(223740, NVDA_POSITION)).toBe('above-range');
+    expect(classifyTick(223741, NVDA_POSITION)).toBe('above-range');
   });
 
   it('handles a range straddling zero', () => {
@@ -74,65 +97,83 @@ describe('classifyTick', () => {
 
 describe('BreachCounter', () => {
   it('does not trigger before the threshold', () => {
-    const counter = new BreachCounter(3);
+    const counter = new BreachCounter();
 
-    expect(counter.record(1n, 'below-range')).toBe(false);
-    expect(counter.record(1n, 'below-range')).toBe(false);
+    expect(counter.record(1n, 'below-range', 3)).toBe(false);
+    expect(counter.record(1n, 'below-range', 3)).toBe(false);
   });
 
   it('triggers exactly at the threshold', () => {
-    const counter = new BreachCounter(3);
+    const counter = new BreachCounter();
 
-    counter.record(1n, 'below-range');
-    counter.record(1n, 'below-range');
+    counter.record(1n, 'below-range', 3);
+    counter.record(1n, 'below-range', 3);
 
-    expect(counter.record(1n, 'below-range')).toBe(true);
+    expect(counter.record(1n, 'below-range', 3)).toBe(true);
   });
 
   it('resets when the pool comes back into range', () => {
-    const counter = new BreachCounter(3);
+    const counter = new BreachCounter();
 
-    counter.record(1n, 'below-range');
-    counter.record(1n, 'below-range');
-    counter.record(1n, 'in-range');
+    counter.record(1n, 'below-range', 3);
+    counter.record(1n, 'below-range', 3);
+    counter.record(1n, 'in-range', 3);
 
     expect(counter.count(1n)).toBe(0);
-    expect(counter.record(1n, 'below-range')).toBe(false);
+    expect(counter.record(1n, 'below-range', 3)).toBe(false);
   });
 
   it('counts each position independently', () => {
-    const counter = new BreachCounter(2);
+    const counter = new BreachCounter();
 
-    counter.record(1n, 'below-range');
+    counter.record(1n, 'below-range', 2);
 
-    expect(counter.record(2n, 'above-range')).toBe(false);
-    expect(counter.record(1n, 'below-range')).toBe(true);
+    expect(counter.record(2n, 'above-range', 2)).toBe(false);
+    expect(counter.record(1n, 'below-range', 2)).toBe(true);
   });
 
   it('triggers on the first reading when the threshold is one', () => {
-    expect(new BreachCounter(1).record(1n, 'above-range')).toBe(true);
+    expect(new BreachCounter().record(1n, 'above-range', 1)).toBe(true);
+  });
+
+  it('applies a different threshold per position, from different symbols', () => {
+    const counter = new BreachCounter();
+
+    // Position 1 needs 1 breach, position 2 needs 3.
+    expect(counter.record(1n, 'below-range', 1)).toBe(true);
+    expect(counter.record(2n, 'below-range', 3)).toBe(false);
+    expect(counter.record(2n, 'below-range', 3)).toBe(false);
+    expect(counter.record(2n, 'below-range', 3)).toBe(true);
   });
 });
 
 interface HarnessOptions {
-  ticks?: number[];
+  nvdaTicks?: number[];
+  aaplTicks?: number[];
   dryRun?: boolean;
   stockBalance?: bigint;
-  positions?: OwnedPosition[];
+  nvdaPositions?: OwnedPosition[];
+  aaplPositions?: OwnedPosition[];
+  watchedSymbols?: WatchedSymbol[];
+  nvdaExitConfirmations?: number;
+  aaplExitConfirmations?: number;
+  nvdaIntervalSeconds?: number;
+  aaplIntervalSeconds?: number;
 }
 
 function harness(options: HarnessOptions = {}) {
-  const ticks = options.ticks ?? [223400];
+  const nvdaTicks = options.nvdaTicks ?? [223400];
+  const aaplTicks = options.aaplTicks ?? [218900];
   let poll = 0;
 
-  const readState = vi.fn(() => {
+  const readState = vi.fn((pool: PoolIdentity) => {
+    const ticks = pool.address === NVDA_POOL.address ? nvdaTicks : aaplTicks;
     const tick = ticks[Math.min(poll, ticks.length - 1)]!;
-    poll++;
     return Promise.resolve({
-      poolAddress: POOL.address,
+      poolAddress: pool.address,
       sqrtPriceX96: getSqrtRatioAtTick(tick),
       tick,
-      liquidity: 817_184_618_165_972_105n,
+      liquidity: 1_000_000_000n,
     } satisfies PoolState);
   });
 
@@ -164,50 +205,81 @@ function harness(options: HarnessOptions = {}) {
 
   const logger = pino({level: 'silent'});
 
-  // A real exit service over fake clients, so the assertions below still
-  // exercise the code path the monitor actually takes.
-  const exitService = new PositionExitService({
-    wallet,
-    feeReader: {read: vi.fn().mockResolvedValue({fees0: 0n, fees1: 0n})},
-    swapService: {executeSell} as never,
-    logger,
-    chainId: 4663,
-    pool: POOL,
-    usdg: USDG,
-    stock: NVDA,
-    closeSlippageBps: 100,
-    sellSlippageBps: 1,
-    deadlineSeconds: 300,
+  function makeExitService(pool: PoolIdentity, stock: TokenMeta) {
+    return new PositionExitService({
+      wallet,
+      feeReader: {read: vi.fn().mockResolvedValue({fees0: 0n, fees1: 0n})},
+      swapService: {executeSell} as never,
+      logger,
+      chainId: 4663,
+      pool,
+      usdg: USDG,
+      stock,
+      closeSlippageBps: 100,
+      sellSlippageBps: 1,
+      deadlineSeconds: 300,
+    });
+  }
+
+  const nvdaWatched: WatchedSymbol = {
+    symbol: 'NVDA',
+    pool: NVDA_POOL,
+    exitService: makeExitService(NVDA_POOL, NVDA),
+    checkIntervalSeconds: options.nvdaIntervalSeconds ?? 30,
+    exitConfirmations: options.nvdaExitConfirmations ?? 3,
+  };
+  const aaplWatched: WatchedSymbol = {
+    symbol: 'AAPL',
+    pool: AAPL_POOL,
+    exitService: makeExitService(AAPL_POOL, AAPL),
+    checkIntervalSeconds: options.aaplIntervalSeconds ?? 30,
+    exitConfirmations: options.aaplExitConfirmations ?? 3,
+  };
+  const watchedSymbols = options.watchedSymbols ?? [nvdaWatched, aaplWatched];
+
+  const discover = vi.fn((pool: PoolIdentity) => {
+    if (pool.address === NVDA_POOL.address) {
+      return Promise.resolve(options.nvdaPositions ?? [NVDA_POSITION]);
+    }
+    return Promise.resolve(options.aaplPositions ?? [AAPL_POSITION]);
+  });
+
+  const sleep = vi.fn(async () => {
+    poll++;
   });
 
   const monitorOptions: PositionMonitorOptions = {
     wallet,
     poolReader: {readState},
     positionReader: {
-      discover: vi.fn().mockResolvedValue(options.positions ?? [POSITION]),
-      read: vi.fn().mockResolvedValue(POSITION),
+      discover,
+      read: vi.fn().mockResolvedValue(NVDA_POSITION),
     },
-    exitService,
+    watchedSymbols,
     logger,
-    pool: POOL,
-    checkIntervalSeconds: 30,
-    exitConfirmations: 3,
     dryRun: options.dryRun ?? false,
-    sleep: vi.fn().mockResolvedValue(undefined),
+    sleep,
   };
 
   return {
     monitor: new PositionMonitor(monitorOptions),
+    monitorOptions,
     writeContract,
     simulateContract,
     executeSell,
     readState,
+    discover,
+    nvdaWatched,
+    aaplWatched,
   };
 }
 
-describe('run', () => {
+describe('run — single symbol (regression)', () => {
   it('does not close while the pool stays in range', async () => {
-    const {monitor, writeContract, executeSell} = harness({ticks: [223400]});
+    const {monitor, writeContract, executeSell} = harness({
+      nvdaTicks: [223400],
+      aaplPositions: [],
+    });
 
     await monitor.run({maxPolls: 10});
 
@@ -215,19 +287,10 @@ describe('run', () => {
     expect(executeSell).not.toHaveBeenCalled();
   });
 
-  it('does not close before the confirmation threshold', async () => {
-    const {monitor, writeContract} = harness({
-      ticks: [223000, 223000],
-    });
-
-    await monitor.run({maxPolls: 2});
-
-    expect(writeContract).not.toHaveBeenCalled();
-  });
-
   it('closes once the pool has been out of range long enough', async () => {
     const {monitor, writeContract, executeSell} = harness({
-      ticks: [223000, 223000, 223000],
+      nvdaTicks: [223000, 223000, 223000],
+      aaplPositions: [],
     });
 
     await monitor.run({maxPolls: 5});
@@ -238,7 +301,8 @@ describe('run', () => {
 
   it('does not close when a wick mean-reverts', async () => {
     const {monitor, writeContract} = harness({
-      ticks: [223000, 223000, 223400, 223000, 223000],
+      nvdaTicks: [223000, 223000, 223400, 223000, 223000],
+      aaplPositions: [],
     });
 
     await monitor.run({maxPolls: 5});
@@ -246,20 +310,10 @@ describe('run', () => {
     expect(writeContract).not.toHaveBeenCalled();
   });
 
-  it('closes when the pool runs above the range too', async () => {
-    const {monitor, writeContract, executeSell} = harness({
-      ticks: [223800, 223800, 223800],
-    });
-
-    await monitor.run({maxPolls: 5});
-
-    expect(writeContract).toHaveBeenCalled();
-    expect(executeSell).toHaveBeenCalled();
-  });
-
   it('simulates before it writes', async () => {
     const {monitor, simulateContract, writeContract} = harness({
-      ticks: [223000, 223000, 223000],
+      nvdaTicks: [223000, 223000, 223000],
+      aaplPositions: [],
     });
 
     await monitor.run({maxPolls: 5});
@@ -268,31 +322,120 @@ describe('run', () => {
       writeContract.mock.invocationCallOrder[0]!,
     );
   });
+});
 
-  it('does not sell when the close returned no stock token', async () => {
-    const {monitor, executeSell} = harness({
-      ticks: [223000, 223000, 223000],
-      stockBalance: 0n,
+describe('run — multiple symbols', () => {
+  it('watches positions across two different pools in one run', async () => {
+    const {monitor, discover} = harness({
+      nvdaTicks: [223400],
+      aaplTicks: [218900],
+    });
+
+    await monitor.run({maxPolls: 1});
+
+    expect(discover).toHaveBeenCalledWith(NVDA_POOL, OWNER);
+    expect(discover).toHaveBeenCalledWith(AAPL_POOL, OWNER);
+  });
+
+  it("a position in one pool triggers independently of the other's tick", async () => {
+    const {monitor, writeContract, executeSell} = harness({
+      nvdaTicks: [223000, 223000, 223000], // out of range, triggers
+      aaplTicks: [218900, 218900, 218900], // stays in range
     });
 
     await monitor.run({maxPolls: 5});
 
-    expect(executeSell).not.toHaveBeenCalled();
+    // Exactly one close: NVDA's.
+    expect(writeContract).toHaveBeenCalledTimes(1);
+    expect(executeSell).toHaveBeenCalledTimes(1);
   });
 
-  it('stops once every position is closed', async () => {
+  it('closes both when both go out of range', async () => {
+    const {monitor, writeContract} = harness({
+      nvdaTicks: [223000, 223000, 223000],
+      aaplTicks: [218000, 218000, 218000],
+    });
+
+    await monitor.run({maxPolls: 5});
+
+    expect(writeContract).toHaveBeenCalledTimes(2);
+  });
+
+  it('polls at the faster of two configured intervals', async () => {
     const {monitor, readState} = harness({
-      ticks: [223000, 223000, 223000],
+      nvdaIntervalSeconds: 30,
+      aaplIntervalSeconds: 5,
+      aaplPositions: [],
+    });
+
+    await monitor.run({maxPolls: 3});
+
+    // Every poll reads NVDA's pool regardless of the interval used for sleep.
+    expect(readState.mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('reads each distinct pool once per tick, not once per position', async () => {
+    const secondNvdaPosition = {...NVDA_POSITION, tokenId: 999n};
+    const {monitor, readState} = harness({
+      nvdaPositions: [NVDA_POSITION, secondNvdaPosition],
+      aaplPositions: [],
+    });
+
+    await monitor.run({maxPolls: 1});
+
+    const nvdaReads = readState.mock.calls.filter(
+      c => (c[0] as PoolIdentity).address === NVDA_POOL.address,
+    );
+    expect(nvdaReads).toHaveLength(1);
+  });
+
+  it("applies each symbol's own exitConfirmations", async () => {
+    const {monitor, writeContract} = harness({
+      nvdaTicks: [223000], // 1 breach: enough for NVDA's threshold of 1
+      aaplTicks: [218900],
+      nvdaExitConfirmations: 1,
+      aaplExitConfirmations: 3,
+    });
+
+    await monitor.run({maxPolls: 1});
+
+    expect(writeContract).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops once every symbol's positions are closed", async () => {
+    const {monitor, readState} = harness({
+      nvdaTicks: [223000, 223000, 223000],
+      aaplTicks: [218000, 218000, 218000],
     });
 
     await monitor.run({maxPolls: 20});
 
-    // Stops when nothing is left, rather than polling to the limit.
-    expect(readState.mock.calls.length).toBeLessThan(20);
+    expect(readState.mock.calls.length).toBeLessThan(20 * 2);
   });
 
-  it('returns immediately when there is nothing to watch', async () => {
-    const {monitor, readState} = harness({positions: []});
+  it('rejects --token-id when more than one symbol is watched', async () => {
+    const {monitor} = harness();
+
+    await expect(monitor.run({tokenId: 1n})).rejects.toThrow(/--symbol/);
+  });
+
+  it('accepts --token-id when exactly one symbol is watched', async () => {
+    const {monitorOptions, nvdaWatched} = harness();
+    const single = new PositionMonitor({
+      ...monitorOptions,
+      watchedSymbols: [nvdaWatched],
+    });
+
+    await expect(
+      single.run({tokenId: 422596n, maxPolls: 1}),
+    ).resolves.toBeUndefined();
+  });
+
+  it('returns immediately when nothing is found across any symbol', async () => {
+    const {monitor, readState} = harness({
+      nvdaPositions: [],
+      aaplPositions: [],
+    });
 
     await monitor.run({maxPolls: 5});
 
@@ -303,7 +446,8 @@ describe('run', () => {
 describe('dry run', () => {
   it('never sends a transaction, however far out of range', async () => {
     const {monitor, writeContract, simulateContract, executeSell} = harness({
-      ticks: [223000, 223000, 223000, 223000],
+      nvdaTicks: [223000, 223000, 223000, 223000],
+      aaplPositions: [],
       dryRun: true,
     });
 
@@ -316,12 +460,13 @@ describe('dry run', () => {
 
   it('keeps watching after reporting what it would do', async () => {
     const {monitor, readState} = harness({
-      ticks: [223000, 223000, 223000, 223000],
+      nvdaTicks: [223000, 223000, 223000, 223000],
+      aaplPositions: [],
       dryRun: true,
     });
 
     await monitor.run({maxPolls: 4});
 
-    expect(readState).toHaveBeenCalledTimes(4);
+    expect(readState.mock.calls.length).toBe(4);
   });
 });

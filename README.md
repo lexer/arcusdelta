@@ -67,6 +67,21 @@ Opens a position from the stock-token balance the wallet already holds, without 
 
 The position uses the wallet's **entire** stock-token balance as the fixed side and derives the USDG needed for the range; it fails clearly if USDG is short. Start with a small `USDG_BUY_AMOUNT` on your first live run.
 
+## Running the full cycle
+
+```sh
+npm run cycle
+```
+
+Buys, deposits, and then stays running to watch the position until it exits — one command instead of running `buy` and `monitor` separately. It's orchestration only: the same `runBuyCommand`, `runDepositCommand`, and `PositionMonitor` the individual commands use, just chained.
+
+Buy and deposit confirm exactly as `npm run buy` does; once deposited, it watches the exact position just minted and runs unattended from there, exactly as `npm run monitor` does — no further prompts.
+
+- `--yes` skips both confirmations, for a fully hands-off run.
+- `--max-polls <n>` stops monitoring after a fixed number of checks (mainly for testing).
+
+This runs **one cycle** — it stops once the position closes rather than buying back in. Re-entering afterward is a manual step (`npm run cycle` again, or `npm run buy`).
+
 ## Monitoring
 
 ```sh

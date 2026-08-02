@@ -46,6 +46,7 @@ graph TD
 | `npm run monitor` | Long-running. Closes positions that go one-sided and sells the stock token. `--dry-run` sends nothing. |
 | `npm run exit` | Withdraws liquidity, claims fees, and sells the stock token. Confirmed; `--dry-run` sends nothing. |
 | `npm run pnl` | Read-only. Profit and loss reconstructed from chain logs, including uncollected fees. |
+| `npm run cycle` | Buys, deposits, and stays running to watch the position until it exits. Orchestrates `buy` + `monitor`, no new logic. |
 
 Each preview shares its code path with the command that spends — `quote` with `SpotBuyService.prepare`, `position` with `DepositService.plan` — so a preflight cannot drift from what actually executes.
 
@@ -177,4 +178,4 @@ All extend `ArcusError` and carry the `tradeId`.
 
 ## Not yet built
 
-Re-entry after an exit: once a position closes, the wallet rests in USDG and the loop ends. Buying and re-depositing at the new price to resume the market-making cycle is the natural next step.
+Re-entry after an exit: `npm run cycle` runs one buy → deposit → monitor → exit cycle and stops; once the position closes, the wallet rests in USDG. Automatically buying back in to resume the cycle is a materially different risk profile (unattended repeated spending) and is left for its own explicit decision.

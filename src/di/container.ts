@@ -13,6 +13,7 @@ import {createRobinhoodChain} from '../chain/robinhoodChain.js';
 import {createWalletProvider} from '../chain/walletProvider.js';
 import type {WalletProvider} from '../chain/walletProvider.js';
 import type {Config} from '../config/config.js';
+import type {SymbolConfig} from '../config/symbols.js';
 import {createLogger} from '../logging/logger.js';
 import type {Logger} from '../logging/logger.js';
 import {PnlReporter} from '../pnl/pnlReporter.js';
@@ -23,8 +24,9 @@ import {createPoolReader} from '../uniswap/poolReader.js';
 import {PositionExitService} from '../uniswap/positionExitService.js';
 import {PositionMonitor} from '../uniswap/positionMonitor.js';
 import {createPositionReader} from '../uniswap/positionReader.js';
+import type {WatchedSymbol} from '../uniswap/positionMonitor.js';
 
-/** Token spent on every buy, and the counter-asset of the LP pool. */
+/** Token spent on every buy, and the counter-asset of every LP pool. */
 const SELL_SYMBOL = 'USDG';
 
 export interface Container {
@@ -33,12 +35,17 @@ export interface Container {
   readonly swapService: SpotSwapService;
   /**
    * Async because token decimals are resolved from the Arcus router rather
-   * than hard-coded.
+   * than hard-coded. Each takes the specific symbol it operates on — there is
+   * no longer a single implicit stock token.
    */
-  createDepositService(): Promise<DepositService>;
-  createMonitor(dryRun: boolean): Promise<PositionMonitor>;
-  createExitService(): Promise<PositionExitService>;
-  createPnlReporter(): Promise<PnlReporter>;
+  createDepositService(symbol: SymbolConfig): Promise<DepositService>;
+  createExitService(symbol: SymbolConfig): Promise<PositionExitService>;
+  /** Builds one monitor watching every symbol in `symbols` at once. */
+  createMonitor(
+    symbols: readonly SymbolConfig[],
+    dryRun: boolean,
+  ): Promise<PositionMonitor>;
+  createPnlReporter(symbol: SymbolConfig): Promise<PnlReporter>;
 }
 
 export function createContainer(config: Config): Container {
@@ -57,11 +64,11 @@ export function createContainer(config: Config): Container {
     sellSymbol: SELL_SYMBOL,
   });
 
-  /** Resolves USDG/stock token metadata and the live v3 pool together. */
-  async function resolvePoolContext() {
+  /** Resolves USDG/stock token metadata and the live v3 pool for one symbol. */
+  async function resolvePoolContext(symbol: SymbolConfig) {
     const [usdgToken, stockToken] = await Promise.all([
       tokens.bySymbol(SELL_SYMBOL),
-      tokens.byAddress(config.stockTokenAddress),
+      tokens.byAddress(symbol.stockTokenAddress),
     ]);
     const usdg = {
       address: usdgToken.address,
@@ -78,13 +85,15 @@ export function createContainer(config: Config): Container {
       config.chainId,
       usdg.address,
       stock.address,
-      config.poolFee,
+      symbol.poolFee,
     );
     return {pool, usdg, stock};
   }
 
-  async function createDepositService(): Promise<DepositService> {
-    const {usdg, stock} = await resolvePoolContext();
+  async function createDepositService(
+    symbol: SymbolConfig,
+  ): Promise<DepositService> {
+    const {usdg, stock} = await resolvePoolContext(symbol);
 
     return new DepositService({
       wallet,
@@ -93,15 +102,17 @@ export function createContainer(config: Config): Container {
       chainId: config.chainId,
       usdg,
       stock,
-      rangeDeviationPercent: config.rangeDeviationPercent,
-      poolFee: config.poolFee,
-      lpSlippageBps: config.lpSlippageBps,
-      mintDeadlineSeconds: config.mintDeadlineSeconds,
+      rangeDeviationPercent: symbol.rangeDeviationPercent,
+      poolFee: symbol.poolFee,
+      lpSlippageBps: symbol.lpSlippageBps,
+      mintDeadlineSeconds: symbol.mintDeadlineSeconds,
     });
   }
 
-  async function createExitService(): Promise<PositionExitService> {
-    const {pool, usdg, stock} = await resolvePoolContext();
+  async function createExitService(
+    symbol: SymbolConfig,
+  ): Promise<PositionExitService> {
+    const {pool, usdg, stock} = await resolvePoolContext(symbol);
 
     return new PositionExitService({
       wallet,
@@ -112,14 +123,28 @@ export function createContainer(config: Config): Container {
       pool,
       usdg,
       stock,
-      closeSlippageBps: config.closeSlippageBps,
-      sellSlippageBps: config.slippageBps,
-      deadlineSeconds: config.mintDeadlineSeconds,
+      closeSlippageBps: symbol.closeSlippageBps,
+      sellSlippageBps: symbol.slippageBps,
+      deadlineSeconds: symbol.mintDeadlineSeconds,
     });
   }
 
-  async function createMonitor(dryRun: boolean): Promise<PositionMonitor> {
-    const {pool} = await resolvePoolContext();
+  async function createMonitor(
+    symbols: readonly SymbolConfig[],
+    dryRun: boolean,
+  ): Promise<PositionMonitor> {
+    const watchedSymbols: WatchedSymbol[] = await Promise.all(
+      symbols.map(async symbol => {
+        const {pool} = await resolvePoolContext(symbol);
+        return {
+          symbol: symbol.symbol,
+          pool,
+          exitService: await createExitService(symbol),
+          checkIntervalSeconds: symbol.poolCheckIntervalSeconds,
+          exitConfirmations: symbol.exitConfirmations,
+        };
+      }),
+    );
 
     return new PositionMonitor({
       wallet,
@@ -128,17 +153,14 @@ export function createContainer(config: Config): Container {
         wallet.getPublicClient(),
         config.chainId,
       ),
-      exitService: await createExitService(),
+      watchedSymbols,
       logger,
-      pool,
-      checkIntervalSeconds: config.poolCheckIntervalSeconds,
-      exitConfirmations: config.exitConfirmations,
       dryRun,
     });
   }
 
-  async function createPnlReporter(): Promise<PnlReporter> {
-    const {pool, usdg, stock} = await resolvePoolContext();
+  async function createPnlReporter(symbol: SymbolConfig): Promise<PnlReporter> {
+    const {pool, usdg, stock} = await resolvePoolContext(symbol);
 
     return new PnlReporter({
       publicClient: wallet.getPublicClient(),

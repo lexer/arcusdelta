@@ -53,6 +53,14 @@ export const envSchema = z.object({
   /** Consecutive out-of-range polls required before closing. */
   EXIT_CONFIRMATIONS: z.coerce.number().int().positive().default(3),
   CLOSE_SLIPPAGE_BPS: z.coerce.number().int().min(0).max(10_000).default(100),
+
+  /**
+   * Arcus trade execution. 1 chunk (the default) disables TWAP: a buy or
+   * sell executes exactly as one quote-sign-submit-poll cycle, same as
+   * before this existed.
+   */
+  TWAP_CHUNKS: z.coerce.number().int().positive().default(1),
+  TWAP_INTERVAL_SECONDS: z.coerce.number().int().positive().default(10),
 });
 
 export type Env = z.infer<typeof envSchema>;

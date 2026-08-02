@@ -43,7 +43,25 @@ describe('loadSymbols', () => {
       rangeDeviationPercent: 3,
       lpSlippageBps: 50,
       exitConfirmations: 3,
+      twapChunks: 1,
+      twapIntervalSeconds: 10,
     });
+  });
+
+  it('lets a per-symbol TWAP override the default', () => {
+    write([
+      {
+        symbol: 'NVDA',
+        stockTokenAddress: NVDA,
+        twapChunks: 4,
+        twapIntervalSeconds: 15,
+      },
+    ]);
+
+    const [resolved] = loadSymbols(filePath, defaults());
+
+    expect(resolved!.twapChunks).toBe(4);
+    expect(resolved!.twapIntervalSeconds).toBe(15);
   });
 
   it('lets a per-symbol field override the default', () => {

@@ -24,6 +24,8 @@ export const symbolEntrySchema = z.object({
   poolCheckIntervalSeconds: z.coerce.number().int().positive().optional(),
   exitConfirmations: z.coerce.number().int().positive().optional(),
   closeSlippageBps: z.coerce.number().int().min(0).max(10_000).optional(),
+  twapChunks: z.coerce.number().int().positive().optional(),
+  twapIntervalSeconds: z.coerce.number().int().positive().optional(),
 });
 
 export const symbolsFileSchema = z.array(symbolEntrySchema);

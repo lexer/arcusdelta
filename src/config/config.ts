@@ -38,6 +38,8 @@ export interface Config {
   readonly poolCheckIntervalSeconds: number;
   readonly exitConfirmations: number;
   readonly closeSlippageBps: number;
+  readonly twapChunks: number;
+  readonly twapIntervalSeconds: number;
 }
 
 export type EnvSource = Record<string, string | undefined>;
@@ -71,6 +73,8 @@ export function loadConfig(source: EnvSource = readDotenv()): Config {
     poolCheckIntervalSeconds: env.POOL_CHECK_INTERVAL_SECONDS,
     exitConfirmations: env.EXIT_CONFIRMATIONS,
     closeSlippageBps: env.CLOSE_SLIPPAGE_BPS,
+    twapChunks: env.TWAP_CHUNKS,
+    twapIntervalSeconds: env.TWAP_INTERVAL_SECONDS,
   });
 }
 
@@ -89,5 +93,7 @@ export function loggableConfig(config: Config): Record<string, unknown> {
     poolCheckIntervalSeconds: config.poolCheckIntervalSeconds,
     exitConfirmations: config.exitConfirmations,
     closeSlippageBps: config.closeSlippageBps,
+    twapChunks: config.twapChunks,
+    twapIntervalSeconds: config.twapIntervalSeconds,
   };
 }

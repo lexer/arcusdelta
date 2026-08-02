@@ -24,6 +24,8 @@ export interface SymbolConfig {
   readonly poolCheckIntervalSeconds: number;
   readonly exitConfirmations: number;
   readonly closeSlippageBps: number;
+  readonly twapChunks: number;
+  readonly twapIntervalSeconds: number;
 }
 
 function resolveEntry(entry: SymbolEntry, defaults: Config): SymbolConfig {
@@ -50,6 +52,9 @@ function resolveEntry(entry: SymbolEntry, defaults: Config): SymbolConfig {
       entry.poolCheckIntervalSeconds ?? defaults.poolCheckIntervalSeconds,
     exitConfirmations: entry.exitConfirmations ?? defaults.exitConfirmations,
     closeSlippageBps: entry.closeSlippageBps ?? defaults.closeSlippageBps,
+    twapChunks: entry.twapChunks ?? defaults.twapChunks,
+    twapIntervalSeconds:
+      entry.twapIntervalSeconds ?? defaults.twapIntervalSeconds,
   };
 }
 

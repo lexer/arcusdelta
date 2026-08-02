@@ -38,6 +38,17 @@ describe('loadConfig', () => {
     expect(config.closeSlippageBps).toBe(100);
   });
 
+  it('applies TWAP defaults, disabled by default', () => {
+    const config = loadConfig(validEnv());
+
+    expect(config.twapChunks).toBe(1);
+    expect(config.twapIntervalSeconds).toBe(10);
+  });
+
+  it('rejects a zero TWAP chunk count', () => {
+    expect(() => loadConfig(validEnv({TWAP_CHUNKS: '0'}))).toThrow(ConfigError);
+  });
+
   it('rejects a zero exit confirmation count', () => {
     expect(() => loadConfig(validEnv({EXIT_CONFIRMATIONS: '0'}))).toThrow(
       ConfigError,

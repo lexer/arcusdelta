@@ -139,18 +139,88 @@ describe('plan', () => {
     expect(plan.stockAmount).toBeLessThanOrEqual(stockBalance);
   });
 
-  it('brackets the computed amounts by the slippage bps on both sides', async () => {
+  it('gives the USDG side headroom, but not the stock side', async () => {
     const {service} = harness();
 
     const plan = await service.plan();
 
-    // USDG is token0 for this pair.
+    // USDG is token0 (amount0) for this pair, stock is token1 (amount1).
     expect(plan.amount0Desired).toBeGreaterThanOrEqual(plan.usdgAmount);
     expect(plan.amount0Min).toBeLessThanOrEqual(plan.usdgAmount);
-    expect(plan.amount1Desired).toBeGreaterThanOrEqual(plan.stockAmount);
-    expect(plan.amount1Min).toBeLessThanOrEqual(plan.stockAmount);
     expect(plan.amount0Desired).toBe((plan.usdgAmount * 10_050n) / 10_000n);
     expect(plan.amount0Min).toBe((plan.usdgAmount * 9_950n) / 10_000n);
+    // The stock ceiling stays exactly at the computed amount.
+    expect(plan.amount1Desired).toBe(plan.stockAmount);
+  });
+
+  it('never asks the mint to pull more stock than the wallet holds', async () => {
+    // Regression test: applying headroom to both sides scales the desired
+    // ratio uniformly, so v3's mint() computes MORE liquidity than intended
+    // and pulls more stock token than the wallet has -- NFPM.mint() then
+    // reverts with "STF" (TransferHelper.safeTransferFrom failure). Confirmed
+    // live: this was a 100%-reproducing bug in every deposit before the fix.
+    const stockBalance = 321_961_365_328_533_640n;
+    const {service} = harness({stockBalance});
+
+    const plan = await service.plan();
+
+    // USDG is token0, stock is token1 for this pair.
+    expect(plan.amount1Desired).toBeLessThanOrEqual(stockBalance);
+  });
+
+  it('holds the same invariant when the stock token sorts as token0', async () => {
+    // Real token addresses can sort either way; USDG happened to be token0
+    // in every pool used so far, so this exercises the other branch of the
+    // stockIsToken0 check directly rather than relying on that coincidence.
+    const LOW_STOCK: TokenMeta = {
+      address: '0x0000000000000000000000000000000000000001',
+      symbol: 'LOWSTOCK',
+      decimals: 18,
+    };
+    const poolAddress = '0xB944cec30Bd4175855215D767ADC81F39e5f7E2B';
+    const stockBalance = 25_178_400_616_157_272n;
+    const usdgBalance = 10n ** 30n; // ample; only the branch matters here
+
+    const readContract = vi.fn(({address, functionName}) => {
+      if (functionName === 'balanceOf') {
+        return Promise.resolve(
+          address === LOW_STOCK.address ? stockBalance : usdgBalance,
+        );
+      }
+      if (functionName === 'allowance') return Promise.resolve(2n ** 256n - 1n);
+      if (functionName === 'getPool') return Promise.resolve(poolAddress);
+      if (functionName === 'feeAmountTickSpacing') return Promise.resolve(60);
+      throw new Error(`unexpected read: ${functionName}`);
+    });
+    const wallet: WalletProvider = {
+      getAccount: () => ({address: OWNER}) as never,
+      getWalletClient: () => ({account: {address: OWNER}}) as never,
+      getPublicClient: () => ({readContract}) as never,
+    };
+    const service = new DepositService({
+      wallet,
+      poolReader: {
+        readState: vi.fn().mockResolvedValue({
+          poolAddress,
+          sqrtPriceX96: getSqrtRatioAtTick(0),
+          tick: 0,
+          liquidity: 1_000_000n,
+        } satisfies PoolState),
+      },
+      logger: pino({level: 'silent'}),
+      chainId: 4663,
+      usdg: USDG,
+      stock: LOW_STOCK,
+      rangeDeviationPercent: 3,
+      poolFee: 3000,
+      lpSlippageBps: 50,
+      mintDeadlineSeconds: 300,
+    });
+
+    const plan = await service.plan();
+
+    expect(plan.amount0Desired).toBe(plan.stockAmount);
+    expect(plan.amount1Desired).toBeGreaterThanOrEqual(plan.usdgAmount);
   });
 
   it('is read-only', async () => {

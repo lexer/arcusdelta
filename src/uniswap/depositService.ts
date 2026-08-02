@@ -57,7 +57,11 @@ export interface DepositPlan {
   readonly liquidity: bigint;
   readonly stockAmount: bigint;
   readonly usdgAmount: bigint;
-  /** Ceiling the mint may pull, computed amount plus `lpSlippageBps`. */
+  /**
+   * Ceiling the mint may pull. The USDG side is the computed amount plus
+   * `lpSlippageBps`; the stock side stays at the exact computed amount, since
+   * the wallet's entire stock balance is already committed with no spare.
+   */
   readonly amount0Desired: bigint;
   readonly amount1Desired: bigint;
   /** Floor the mint must return, computed amount minus `lpSlippageBps`. */
@@ -262,9 +266,16 @@ export class DepositService {
       liquidity,
     );
 
+    // The stock side's ceiling must stay at the exact computed amount, never
+    // above it: `liquidity` was derived to fit the wallet's actual stock
+    // balance with no spare, so headroom there asks mint() to pull more stock
+    // token than exists and NFPM.mint() reverts with "STF" (v3's
+    // TransferHelper.safeTransferFrom failure) -- confirmed live. Only the
+    // USDG side, where the wallet holds a surplus, gets headroom to tolerate
+    // a price move between simulation and execution.
     const bps = this.options.lpSlippageBps;
-    const amount0Desired = withHeadroom(amount0, bps);
-    const amount1Desired = withHeadroom(amount1, bps);
+    const amount0Desired = stockIsToken0 ? amount0 : withHeadroom(amount0, bps);
+    const amount1Desired = stockIsToken0 ? withHeadroom(amount1, bps) : amount1;
     const amount0Min = withFloor(amount0, bps);
     const amount1Min = withFloor(amount1, bps);
 

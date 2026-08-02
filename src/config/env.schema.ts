@@ -9,10 +9,17 @@ import {z} from 'zod';
 
 const HEX_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 
-const address = z
+/** Shared with `symbols.schema.ts`, since a symbol entry needs the same check. */
+export const address = z
   .string()
   .regex(HEX_ADDRESS, 'must be a 0x-prefixed 20-byte address')
   .transform(value => value as `0x${string}`);
+
+/** Shared with `symbols.schema.ts` for the same field on a symbol entry. */
+export const usdgAmount = z
+  .string()
+  .regex(/^\d+(\.\d+)?$/, 'must be a positive decimal number')
+  .refine(value => Number(value) > 0, 'must be greater than zero');
 
 export const envSchema = z.object({
   SEED: z.string().min(1, 'SEED is required (production wallet mnemonic)'),
@@ -22,11 +29,12 @@ export const envSchema = z.object({
     .string()
     .url()
     .default('https://router.spot.arcus.xyz/v1'),
-  STOCK_TOKEN_ADDRESS: address,
-  USDG_BUY_AMOUNT: z
-    .string()
-    .regex(/^\d+(\.\d+)?$/, 'must be a positive decimal number')
-    .refine(value => Number(value) > 0, 'must be greater than zero'),
+  /**
+   * Fallback when a symbols.json entry omits its own usdgBuyAmount. No
+   * default of its own: a symbol with no amount from either source is a
+   * config error naming that symbol, not a silently-assumed number.
+   */
+  USDG_BUY_AMOUNT: usdgAmount.optional(),
   SLIPPAGE_BPS: z.coerce.number().int().min(0).max(10_000).default(1),
 
   // Uniswap v3 liquidity position.

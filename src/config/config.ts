@@ -15,14 +15,21 @@ export class ConfigError extends Error {
   }
 }
 
-/** Validated configuration. `seed` is secret and must never be logged. */
+/**
+ * Validated configuration. `seed` is secret and must never be logged.
+ *
+ * Every field below `arcusRouterUrl` is a *default*: the fallback a
+ * `symbols.json` entry falls back to when it doesn't override that field
+ * itself. There is no longer a single global stock token — see
+ * `symbols.ts` for the per-symbol list.
+ */
 export interface Config {
   readonly seed: string;
   readonly rpcUrl: string;
   readonly chainId: number;
   readonly arcusRouterUrl: string;
-  readonly stockTokenAddress: `0x${string}`;
-  readonly usdgBuyAmount: string;
+  /** Fallback only; a symbol with no amount from either source is a config error. */
+  readonly usdgBuyAmount: string | undefined;
   readonly slippageBps: number;
   readonly rangeDeviationPercent: number;
   readonly poolFee: number;
@@ -55,7 +62,6 @@ export function loadConfig(source: EnvSource = readDotenv()): Config {
     rpcUrl: env.RPC_URL,
     chainId: env.CHAIN_ID,
     arcusRouterUrl: env.ARCUS_ROUTER_URL,
-    stockTokenAddress: env.STOCK_TOKEN_ADDRESS,
     usdgBuyAmount: env.USDG_BUY_AMOUNT,
     slippageBps: env.SLIPPAGE_BPS,
     rangeDeviationPercent: env.RANGE_DEVIATION_PERCENT,
@@ -74,7 +80,6 @@ export function loggableConfig(config: Config): Record<string, unknown> {
     rpcUrl: config.rpcUrl,
     chainId: config.chainId,
     arcusRouterUrl: config.arcusRouterUrl,
-    stockTokenAddress: config.stockTokenAddress,
     usdgBuyAmount: config.usdgBuyAmount,
     slippageBps: config.slippageBps,
     rangeDeviationPercent: config.rangeDeviationPercent,

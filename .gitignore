@@ -23,6 +23,9 @@ coverage/
 .env.*
 !.env.example
 
+# Operator's own symbol list; symbols.example.json is the committed template
+symbols.json
+
 # Logs
 npm-debug.log*
 yarn-debug.log*

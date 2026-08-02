@@ -1,6 +1,6 @@
 # 0007 — Multi-symbol configuration
 
-Status: in progress
+Status: complete
 
 ## Context
 

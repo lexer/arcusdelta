@@ -1,29 +1,32 @@
 # Architecture
 
-`arcusamm` is an automated market-making bot for tokenized stocks on Robinhood Chain. The full strategy buys a stock token on Arcus spot, deposits it into a Uniswap v3 USDG/stock pool with a concentrated range, and closes when the pool shifts fully to one side.
+`arcusamm` is an automated market-making bot for tokenized stocks on Robinhood Chain. For each configured symbol, the strategy buys its stock token on Arcus spot, deposits it into a Uniswap v3 USDG/stock pool with a concentrated range, and closes when the pool shifts fully to one side.
 
-All four steps are implemented: a manually triggered Arcus spot buy ([plan 0001](../plans/0001-arcus-spot-buy-cli.md)), a v3 position with a ±X% range ([plan 0002](../plans/0002-uniswap-v4-lp-deposit.md), superseded by [plan 0005](../plans/0005-migrate-to-uniswap-v3.md)), pool monitoring and exit ([plan 0003](../plans/0003-position-monitor.md)), and profit/loss reporting ([plan 0004](../plans/0004-pnl-reporting.md)).
+All four steps are implemented: a manually triggered Arcus spot buy ([plan 0001](../plans/0001-arcus-spot-buy-cli.md)), a v3 position with a ±X% range ([plan 0002](../plans/0002-uniswap-v4-lp-deposit.md), superseded by [plan 0005](../plans/0005-migrate-to-uniswap-v3.md)), pool monitoring and exit ([plan 0003](../plans/0003-position-monitor.md)), and profit/loss reporting ([plan 0004](../plans/0004-pnl-reporting.md)). The bot manages a **portfolio** of symbols rather than one hardcoded token ([plan 0007](../plans/0007-multi-symbol-config.md)).
 
 The Arcus buy delivers the **plain** stock token — the same one the pool uses — confirmed from the `SwapExecuted` logs of a live trade. No wrap/unwrap step is needed.
 
 **Migrated from v4 to v3** (plan 0005). v3 has no singleton PoolManager: each pool is its own contract, resolved live via `factory.getPool()` rather than a hash computed offline. Positions are enumerable (`balanceOf` + `tokenOfOwnerByIndex`), so discovery needs no block-range lookback — the exact bug class that once caused `monitor`/`exit` to miss a real position. Approvals are a single plain `approve()`, since v3 pulls funds via `transferFrom` rather than routing through Permit2.
 
+**Multi-symbol** (plan 0007). Every symbol-scoped module (`SpotSwapService`, `DepositService`, `PositionExitService`, `PoolReader`, `PositionReader`, `FeeReader`, tick/liquidity math) already took a resolved pool/token pair as a constructor parameter rather than a global, so none of them changed. What changed is where that parameter comes from: `config/symbols.ts` loads `symbols.json` and resolves each entry against `.env` as defaults, `di/container.ts`'s factory methods now take a `SymbolConfig` and build per-symbol service instances, `PositionMonitor` watches N pools in one process instead of one, and every CLI entrypoint batches across whatever symbols `--symbol` selects (all of them, by default).
+
 ## Modules
 
 | Module | Purpose |
 | --- | --- |
-| `config/` | Zod schema over `process.env`; fails fast on an invalid environment. `loggableConfig` strips the seed for logging. |
+| `config/` | Zod schema over `process.env` for shared defaults (`env.schema.ts`/`config.ts`), and over `symbols.json` for the per-symbol list (`symbols.schema.ts`/`symbols.ts`). Fails fast on an invalid environment, malformed file, duplicate symbol, or a symbol with no buy amount from either source. `loggableConfig` strips the seed for logging. |
 | `logging/` | pino factory with secret redaction; child loggers bind a `tradeId` so one trade is traceable end to end. |
 | `chain/` | viem `Chain` for Robinhood Chain (4663) and the `WalletProvider` that derives the production account from `SEED`. |
-| `arcus/` | Token resolution from the router list, typed errors, and `SpotBuyService` — the quote → sign → submit → poll flow. |
-| `uniswap/` | v3 deployment addresses, pool address resolution (`poolAddress.ts`), tick and liquidity math, pool reads, range calculation, plain ERC20 approvals (`erc20.ts`), mint/close/discovery/fees, and the deposit and exit orchestration. |
-| `pnl/` | Profit and loss: pure arithmetic in `pnlCalculator.ts`, chain reconstruction in `pnlReporter.ts`. |
-| `di/` | The single composition root. Everything else takes dependencies as constructor parameters. |
-| `cli/` | `buyCommand.ts` and `depositCommand.ts` hold the command logic (IO-free, so the confirmation gates are testable); `buy.ts`, `quote.ts`, `deposit.ts`, and `position.ts` are thin entrypoints. |
+| `arcus/` | Token resolution from the router list, typed errors, and `SpotSwapService` — the quote → sign → submit → poll flow, parameterized per buy request rather than per symbol. |
+| `uniswap/` | v3 deployment addresses, pool address resolution (`poolAddress.ts`), tick and liquidity math, pool reads, range calculation, plain ERC20 approvals (`erc20.ts`), mint/close/discovery/fees, the deposit and exit orchestration, and `positionMonitor.ts` watching every configured symbol's pool in one loop. |
+| `pnl/` | Profit and loss: pure arithmetic in `pnlCalculator.ts`, chain reconstruction in `pnlReporter.ts`, one report per symbol. |
+| `di/` | The single composition root. `createDepositService`/`createExitService`/`createPnlReporter` each take a `SymbolConfig` and build a service scoped to that symbol's pool; `createMonitor` takes the whole selected list and builds one `PositionMonitor` watching all of them. |
+| `cli/` | `buyCommand.ts`, `depositCommand.ts`, and `exitCommand.ts` hold the command logic (IO-free, so the confirmation gates are testable) — each takes a list of per-symbol request items, plans every one, shows one combined summary, takes one confirmation, then executes each independently so one symbol's failure doesn't lose track of the rest. `symbolSelection.ts` loads `symbols.json` and narrows it to `--symbol`, shared by every entrypoint. `buy.ts`, `quote.ts`, `deposit.ts`, `position.ts`, `exit.ts`, `monitor.ts`, `cycle.ts`, and `pnl.ts` are thin entrypoints. |
 
 ```mermaid
 graph TD
-    CLI[cli/buy.ts] --> Cfg[config]
+    CLI[cli/buy.ts] --> Cfg[config/config.ts]
+    CLI --> Sym[config/symbols.ts]
     CLI --> DI[di/container.ts]
     DI --> Log[logging]
     DI --> Wallet[chain/walletProvider]
@@ -37,18 +40,20 @@ graph TD
 
 ## Commands
 
+Every command below defaults to acting on every symbol in `symbols.json`, narrowed to one via `--symbol <TICKER>`.
+
 | Command | Effect |
 | --- | --- |
-| `npm run quote` | Read-only. Resolves tokens, quotes, and validates, then stops. |
-| `npm run position` | Read-only. Reads the pool and balances, computes the range and both legs, then stops. |
-| `npm run buy` | Buys, then deposits. Two separate confirmations. `--no-deposit` stops after the buy. |
-| `npm run deposit` | Opens a position from the balance already held. |
-| `npm run monitor` | Long-running. Closes positions that go one-sided and sells the stock token. `--dry-run` sends nothing. |
-| `npm run exit` | Withdraws liquidity, claims fees, and sells the stock token. Confirmed; `--dry-run` sends nothing. |
-| `npm run pnl` | Read-only. Profit and loss reconstructed from chain logs, including uncollected fees. |
-| `npm run cycle` | Buys, deposits, and stays running to watch the position until it exits. Orchestrates `buy` + `monitor`, no new logic. |
+| `npm run quote` | Read-only. Resolves tokens, quotes, and validates for each selected symbol, then stops. |
+| `npm run position` | Read-only. Reads each selected symbol's pool and balances, computes the range and both legs, then stops. |
+| `npm run buy` | Buys, then deposits, for each selected symbol. Two separate confirmations, each covering the whole batch. `--no-deposit` stops after the buys. |
+| `npm run deposit` | Opens a position for each selected symbol from the balance already held. |
+| `npm run monitor` | Long-running. Watches every selected symbol's pool in one process; closes positions that go one-sided and sells the stock token. `--dry-run` sends nothing. |
+| `npm run exit` | Withdraws liquidity, claims fees, and sells the stock token, across every selected symbol's positions. One confirmation covers the batch; `--dry-run` sends nothing. |
+| `npm run pnl` | Read-only. Profit and loss reconstructed from chain logs, per selected symbol, including uncollected fees. |
+| `npm run cycle` | Buys, deposits, and stays running to watch the opened positions until they exit. Orchestrates `buy` + `monitor` across whatever symbols were selected, no new logic. |
 
-Each preview shares its code path with the command that spends — `quote` with `SpotBuyService.prepare`, `position` with `DepositService.plan` — so a preflight cannot drift from what actually executes.
+Each preview shares its code path with the command that spends — `quote` with `SpotSwapService.previewQuote`, `position` with `DepositService.plan` — so a preflight cannot drift from what actually executes.
 
 ## Liquidity position
 

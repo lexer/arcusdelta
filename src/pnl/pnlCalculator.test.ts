@@ -2,6 +2,7 @@ import {describe, expect, it} from 'vitest';
 import {getSqrtRatioAtTick} from '../uniswap/tickMath.js';
 import {
   accruedFees,
+  computeFeeGrowthInside,
   computePnl,
   poolPriceUsdgPerStock,
   valueInUsdg,
@@ -92,6 +93,205 @@ describe('accruedFees', () => {
 
     expect(fees0).toBeGreaterThanOrEqual(0n);
     expect(fees1).toBeGreaterThanOrEqual(0n);
+  });
+});
+
+describe('computeFeeGrowthInside', () => {
+  // Read live from the USDG/NVDA 0.3% pool on Robinhood Chain: tick 223347,
+  // range [223080, 223740] (the tick bounds of the earlier NVDA position).
+  const GLOBAL0 = 23_382_488_226_102_882_308_410_566_148_313n;
+  const GLOBAL1 = 113_262_257_561_623_736_731_260_521_563_379_089_369_257n;
+  const LOWER_OUTSIDE0 = 22_845_096_945_649_517_852_342_816_096_321n;
+  const LOWER_OUTSIDE1 =
+    111_510_418_231_959_233_304_155_655_759_417_494_038_118n;
+  const UPPER_OUTSIDE0 = 0n;
+  const UPPER_OUTSIDE1 = 0n;
+  const CURRENT_TICK = 223347;
+  const LOWER = 223080;
+  const UPPER = 223740;
+
+  it('matches the value implied by live pool state (current tick inside range)', () => {
+    const result = computeFeeGrowthInside(
+      CURRENT_TICK,
+      LOWER,
+      UPPER,
+      GLOBAL0,
+      GLOBAL1,
+      LOWER_OUTSIDE0,
+      LOWER_OUTSIDE1,
+      UPPER_OUTSIDE0,
+      UPPER_OUTSIDE1,
+    );
+
+    // Current tick is above lower and below upper: inside = global -
+    // lower.outside - upper.outside, per Tick.getFeeGrowthInside.
+    expect(result.feeGrowthInside0X128).toBe(
+      GLOBAL0 - LOWER_OUTSIDE0 - UPPER_OUTSIDE0,
+    );
+    expect(result.feeGrowthInside1X128).toBe(
+      GLOBAL1 - LOWER_OUTSIDE1 - UPPER_OUTSIDE1,
+    );
+  });
+
+  it('is positive and bounded by global growth for a real in-range case', () => {
+    const result = computeFeeGrowthInside(
+      CURRENT_TICK,
+      LOWER,
+      UPPER,
+      GLOBAL0,
+      GLOBAL1,
+      LOWER_OUTSIDE0,
+      LOWER_OUTSIDE1,
+      UPPER_OUTSIDE0,
+      UPPER_OUTSIDE1,
+    );
+
+    expect(result.feeGrowthInside0X128).toBeGreaterThan(0n);
+    expect(result.feeGrowthInside0X128).toBeLessThan(GLOBAL0);
+  });
+
+  it('uses the raw outside values when the current tick sits below the range', () => {
+    const below = LOWER - 60;
+    const result = computeFeeGrowthInside(
+      below,
+      LOWER,
+      UPPER,
+      100n,
+      200n,
+      30n,
+      40n,
+      10n,
+      20n,
+    );
+
+    // Below range: feeGrowthBelow = global - lower.outside (wrapped),
+    // feeGrowthAbove = upper.outside directly.
+    expect(result.feeGrowthInside0X128).toBe(100n - (100n - 30n) - 10n);
+    expect(result.feeGrowthInside1X128).toBe(200n - (200n - 40n) - 20n);
+  });
+
+  it('uses the raw outside values when the current tick sits above the range', () => {
+    const U256 = 2n ** 256n;
+    const wrap = (value: bigint) => ((value % U256) + U256) % U256;
+    const above = UPPER + 60;
+
+    const result = computeFeeGrowthInside(
+      above,
+      LOWER,
+      UPPER,
+      100n,
+      200n,
+      30n,
+      40n,
+      10n,
+      20n,
+    );
+
+    // Above range: feeGrowthBelow = lower.outside directly,
+    // feeGrowthAbove = global - upper.outside (wrapped) — here that
+    // underflows, exactly the unchecked-math case the pool itself allows.
+    expect(result.feeGrowthInside0X128).toBe(wrap(100n - 30n - (100n - 10n)));
+    expect(result.feeGrowthInside1X128).toBe(wrap(200n - 40n - (200n - 20n)));
+  });
+
+  it('treats the lower boundary itself as inside', () => {
+    const atLower = computeFeeGrowthInside(
+      LOWER,
+      LOWER,
+      UPPER,
+      100n,
+      200n,
+      30n,
+      40n,
+      10n,
+      20n,
+    );
+    const justBelow = computeFeeGrowthInside(
+      LOWER - 1,
+      LOWER,
+      UPPER,
+      100n,
+      200n,
+      30n,
+      40n,
+      10n,
+      20n,
+    );
+
+    expect(atLower.feeGrowthInside0X128).not.toBe(
+      justBelow.feeGrowthInside0X128,
+    );
+  });
+
+  it('treats the upper boundary itself as outside (exclusive on the high end)', () => {
+    const atUpper = computeFeeGrowthInside(
+      UPPER,
+      LOWER,
+      UPPER,
+      100n,
+      200n,
+      30n,
+      40n,
+      10n,
+      20n,
+    );
+    const justBelow = computeFeeGrowthInside(
+      UPPER - 1,
+      LOWER,
+      UPPER,
+      100n,
+      200n,
+      30n,
+      40n,
+      10n,
+      20n,
+    );
+
+    expect(atUpper.feeGrowthInside0X128).not.toBe(
+      justBelow.feeGrowthInside0X128,
+    );
+  });
+
+  it('wraps rather than throwing on an underflow, matching unchecked pool math', () => {
+    const result = computeFeeGrowthInside(
+      LOWER + 1,
+      LOWER,
+      UPPER,
+      5n,
+      5n,
+      2n ** 256n - 3n, // global - outside underflows without wrapping
+      0n,
+      0n,
+      0n,
+    );
+
+    expect(result.feeGrowthInside0X128).toBeGreaterThanOrEqual(0n);
+  });
+
+  it('feeds directly into accruedFees to reproduce a live reading', () => {
+    // Chains the two functions the way feeReader does, end to end.
+    const {feeGrowthInside0X128, feeGrowthInside1X128} = computeFeeGrowthInside(
+      CURRENT_TICK,
+      LOWER,
+      UPPER,
+      GLOBAL0,
+      GLOBAL1,
+      LOWER_OUTSIDE0,
+      LOWER_OUTSIDE1,
+      UPPER_OUTSIDE0,
+      UPPER_OUTSIDE1,
+    );
+
+    const {fees0, fees1} = accruedFees(
+      60_210_398_382_745n,
+      feeGrowthInside0X128,
+      feeGrowthInside1X128,
+      0n,
+      0n,
+    );
+
+    expect(fees0).toBeGreaterThan(0n);
+    expect(fees1).toBeGreaterThan(0n);
   });
 });
 

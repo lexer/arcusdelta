@@ -1,160 +1,145 @@
 /**
- * Discovers and reads Uniswap v4 positions owned by the wallet.
+ * Discovers and reads Uniswap v3 positions owned by the wallet.
  *
- * PositionManager is not ERC721Enumerable, so ownership is discovered from
- * `Transfer` logs rather than an on-chain index. Discovery deliberately filters
- * by pool key: the wallet may hold positions in other pools, and those must
- * stay invisible to anything that closes positions.
+ * `NonfungiblePositionManager` implements `IERC721Enumerable`, so ownership
+ * comes from a direct `balanceOf` + `tokenOfOwnerByIndex` read — no block-range
+ * log scan, no lookback window to get wrong. Discovery still filters by pool
+ * (token0, token1, fee), since the wallet may hold positions in other pools
+ * and those must stay invisible to anything that closes positions.
  */
 
-import {parseAbiItem, type Hex, type PublicClient} from 'viem';
-import type {Logger} from '../logging/logger.js';
-import {getV4Deployment} from './deployments.js';
-import {toPoolId, type PoolKey} from './poolKey.js';
+import type {Hex, PublicClient} from 'viem';
+import {getAddress} from 'viem';
+import {getV3Deployment} from './deployments.js';
+import type {PoolIdentity} from './poolAddress.js';
 
 export const POSITION_READ_ABI = [
   {
     type: 'function',
-    name: 'ownerOf',
+    name: 'balanceOf',
     stateMutability: 'view',
-    inputs: [{name: 'tokenId', type: 'uint256'}],
-    outputs: [{type: 'address'}],
+    inputs: [{name: 'owner', type: 'address'}],
+    outputs: [{type: 'uint256'}],
   },
   {
     type: 'function',
-    name: 'getPositionLiquidity',
+    name: 'tokenOfOwnerByIndex',
     stateMutability: 'view',
-    inputs: [{name: 'tokenId', type: 'uint256'}],
-    outputs: [{name: 'liquidity', type: 'uint128'}],
+    inputs: [
+      {name: 'owner', type: 'address'},
+      {name: 'index', type: 'uint256'},
+    ],
+    outputs: [{name: 'tokenId', type: 'uint256'}],
   },
   {
     type: 'function',
-    name: 'getPoolAndPositionInfo',
+    name: 'positions',
     stateMutability: 'view',
     inputs: [{name: 'tokenId', type: 'uint256'}],
     outputs: [
-      {
-        name: 'poolKey',
-        type: 'tuple',
-        components: [
-          {name: 'currency0', type: 'address'},
-          {name: 'currency1', type: 'address'},
-          {name: 'fee', type: 'uint24'},
-          {name: 'tickSpacing', type: 'int24'},
-          {name: 'hooks', type: 'address'},
-        ],
-      },
-      {name: 'info', type: 'uint256'},
+      {name: 'nonce', type: 'uint96'},
+      {name: 'operator', type: 'address'},
+      {name: 'token0', type: 'address'},
+      {name: 'token1', type: 'address'},
+      {name: 'fee', type: 'uint24'},
+      {name: 'tickLower', type: 'int24'},
+      {name: 'tickUpper', type: 'int24'},
+      {name: 'liquidity', type: 'uint128'},
+      {name: 'feeGrowthInside0LastX128', type: 'uint256'},
+      {name: 'feeGrowthInside1LastX128', type: 'uint256'},
+      {name: 'tokensOwed0', type: 'uint128'},
+      {name: 'tokensOwed1', type: 'uint128'},
     ],
   },
 ] as const;
-
-const TRANSFER_EVENT = parseAbiItem(
-  'event Transfer(address indexed from, address indexed to, uint256 indexed id)',
-);
-
-/** Blocks per eth_getLogs request. Providers cap the range they will serve. */
-const LOG_CHUNK_BLOCKS = 50_000n;
 
 export interface OwnedPosition {
   readonly tokenId: bigint;
   readonly tickLower: number;
   readonly tickUpper: number;
   readonly liquidity: bigint;
-  /**
-   * Transaction that transferred this position to the owner, when discovery
-   * found it via logs. PnL needs it to recover what was actually deposited —
-   * the USDG side comes from the wallet, not from an Arcus trade.
-   */
-  readonly mintTxHash?: Hex;
-}
-
-/**
- * Decodes the tick bounds from a packed v4 `PositionInfo`.
- *
- * Layout, from PositionInfoLibrary: bits 0-7 hasSubscriber, 8-31 tickLower,
- * 32-55 tickUpper, remainder the truncated pool id. Both ticks are signed.
- */
-export function decodePositionTicks(info: bigint): {
-  tickLower: number;
-  tickUpper: number;
-} {
-  return {
-    tickLower: Number(BigInt.asIntN(24, (info >> 8n) & 0xffffffn)),
-    tickUpper: Number(BigInt.asIntN(24, (info >> 32n) & 0xffffffn)),
-  };
+  readonly feeGrowthInside0LastX128: bigint;
+  readonly feeGrowthInside1LastX128: bigint;
 }
 
 export interface PositionReader {
-  /** Positions the owner still holds in `key`, with non-zero liquidity. */
-  discover(key: PoolKey, owner: Hex): Promise<OwnedPosition[]>;
+  /** Positions the owner holds in `pool`, with non-zero liquidity. */
+  discover(pool: PoolIdentity, owner: Hex): Promise<OwnedPosition[]>;
   /** Reads one position, or undefined if it is gone, empty, or another pool's. */
   read(
     tokenId: bigint,
-    key: PoolKey,
-    owner: Hex,
-    mintTxHash?: Hex,
+    pool: PoolIdentity,
+    owner?: Hex,
   ): Promise<OwnedPosition | undefined>;
 }
 
 export function createPositionReader(
   client: PublicClient,
   chainId: number,
-  lookbackBlocks: number,
-  logger: Logger,
 ): PositionReader {
-  const positionManager = getV4Deployment(chainId).positionManager;
+  const positionManager = getV3Deployment(chainId).positionManager;
 
   async function read(
     tokenId: bigint,
-    key: PoolKey,
-    owner: Hex,
-    mintTxHash?: Hex,
+    pool: PoolIdentity,
+    owner?: Hex,
   ): Promise<OwnedPosition | undefined> {
-    const expectedPoolId = toPoolId(key);
     try {
-      const [currentOwner, liquidity, poolAndInfo] = await Promise.all([
-        client.readContract({
+      const info = await client.readContract({
+        address: positionManager,
+        abi: POSITION_READ_ABI,
+        functionName: 'positions',
+        args: [tokenId],
+      });
+      const [
+        ,
+        ,
+        token0,
+        token1,
+        fee,
+        tickLower,
+        tickUpper,
+        liquidity,
+        feeGrowthInside0LastX128,
+        feeGrowthInside1LastX128,
+      ] = info;
+
+      if (liquidity === 0n) return undefined;
+      if (getAddress(token0) !== getAddress(pool.token0)) return undefined;
+      if (getAddress(token1) !== getAddress(pool.token1)) return undefined;
+      if (fee !== pool.fee) return undefined;
+
+      if (owner) {
+        // positions() doesn't return the owner; a caller who cares must check
+        // separately (a burned tokenId reverts positions(), so this only
+        // matters for "does this wallet still hold it").
+        const currentOwner = await client.readContract({
           address: positionManager,
-          abi: POSITION_READ_ABI,
+          abi: [
+            {
+              type: 'function',
+              name: 'ownerOf',
+              stateMutability: 'view',
+              inputs: [{name: 'tokenId', type: 'uint256'}],
+              outputs: [{type: 'address'}],
+            },
+          ] as const,
           functionName: 'ownerOf',
           args: [tokenId],
-        }),
-        client.readContract({
-          address: positionManager,
-          abi: POSITION_READ_ABI,
-          functionName: 'getPositionLiquidity',
-          args: [tokenId],
-        }),
-        client.readContract({
-          address: positionManager,
-          abi: POSITION_READ_ABI,
-          functionName: 'getPoolAndPositionInfo',
-          args: [tokenId],
-        }),
-      ]);
+        });
+        if (getAddress(currentOwner) !== getAddress(owner)) return undefined;
+      }
 
-      if (currentOwner.toLowerCase() !== owner.toLowerCase()) return undefined;
-      if (liquidity === 0n) return undefined;
-
-      const [poolKey, info] = poolAndInfo;
-      // Compare by pool id so every key field must match, not just the pair.
-      if (toPoolId(poolKey as PoolKey) !== expectedPoolId) return undefined;
-
-      const {tickLower, tickUpper} = decodePositionTicks(info);
       return {
         tokenId,
         tickLower,
         tickUpper,
         liquidity,
-        ...(mintTxHash ? {mintTxHash} : {}),
+        feeGrowthInside0LastX128,
+        feeGrowthInside1LastX128,
       };
-    } catch (error) {
-      // A burned token reverts on ownerOf; that is a normal outcome here.
-      logger.debug(
-        {tokenId: tokenId.toString(), error: String(error)},
-        'position read failed, skipping',
-      );
+    } catch {
+      // Burned or never minted; a normal outcome here.
       return undefined;
     }
   }
@@ -162,65 +147,29 @@ export function createPositionReader(
   return {
     read,
 
-    async discover(key: PoolKey, owner: Hex): Promise<OwnedPosition[]> {
-      const latest = await client.getBlockNumber();
-      const earliest =
-        latest > BigInt(lookbackBlocks) ? latest - BigInt(lookbackBlocks) : 0n;
+    async discover(pool: PoolIdentity, owner: Hex): Promise<OwnedPosition[]> {
+      const balance = await client.readContract({
+        address: positionManager,
+        abi: POSITION_READ_ABI,
+        functionName: 'balanceOf',
+        args: [owner],
+      });
 
-      logger.info(
-        {
-          owner,
-          poolId: toPoolId(key),
-          fromBlock: earliest.toString(),
-          toBlock: latest.toString(),
-        },
-        'discovering positions',
-      );
-
-      const candidates = new Map<bigint, Hex | undefined>();
-      for (let end = latest; end > earliest; end -= LOG_CHUNK_BLOCKS) {
-        const start =
-          end > earliest + LOG_CHUNK_BLOCKS ? end - LOG_CHUNK_BLOCKS : earliest;
-        try {
-          const logs = await client.getLogs({
+      const tokenIds = await Promise.all(
+        Array.from({length: Number(balance)}, (_, index) =>
+          client.readContract({
             address: positionManager,
-            event: TRANSFER_EVENT,
-            args: {to: owner},
-            fromBlock: start,
-            toBlock: end,
-          });
-          for (const entry of logs) {
-            if (entry.args.id === undefined) continue;
-            candidates.set(entry.args.id, entry.transactionHash ?? undefined);
-          }
-        } catch (error) {
-          logger.warn(
-            {
-              fromBlock: start.toString(),
-              toBlock: end.toString(),
-              error: String(error),
-            },
-            'log range rejected, skipping chunk',
-          );
-        }
-      }
-
-      const positions: OwnedPosition[] = [];
-      for (const [tokenId, mintTxHash] of candidates) {
-        const position = await read(tokenId, key, owner, mintTxHash);
-        if (position) positions.push(position);
-      }
-      positions.sort((a, b) => (a.tokenId < b.tokenId ? -1 : 1));
-
-      logger.info(
-        {
-          candidates: candidates.size,
-          matched: positions.length,
-          tokenIds: positions.map(p => p.tokenId.toString()),
-        },
-        'discovered positions',
+            abi: POSITION_READ_ABI,
+            functionName: 'tokenOfOwnerByIndex',
+            args: [owner, BigInt(index)],
+          }),
+        ),
       );
-      return positions;
+
+      const positions = await Promise.all(
+        tokenIds.map(tokenId => read(tokenId, pool)),
+      );
+      return positions.filter((p): p is OwnedPosition => p !== undefined);
     },
   };
 }

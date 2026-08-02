@@ -14,15 +14,7 @@ const IDENTITY: PoolIdentity = {
 function harness(sqrtPriceX96: bigint, tick = 223347, liquidity = 1_000n) {
   const readContract = vi.fn(({functionName}) => {
     if (functionName === 'slot0') {
-      return Promise.resolve([
-        sqrtPriceX96,
-        tick,
-        0,
-        1,
-        1,
-        0,
-        true,
-      ] as const);
+      return Promise.resolve([sqrtPriceX96, tick, 0, 1, 1, 0, true] as const);
     }
     if (functionName === 'liquidity') return Promise.resolve(liquidity);
     throw new Error(`unexpected ${functionName}`);
@@ -32,7 +24,8 @@ function harness(sqrtPriceX96: bigint, tick = 223347, liquidity = 1_000n) {
 
 describe('readState', () => {
   it('reads slot0 and liquidity from the pool address directly', async () => {
-    const {reader, readContract} = harness(5_630_988_710_377_423_664_134_631_725_262_565n);
+    const {reader, readContract} =
+      harness(5_630_988_710_377_423_664_134_631_725_262_565n);
 
     const state = await reader.readState(IDENTITY);
 
@@ -40,7 +33,10 @@ describe('readState', () => {
     expect(state.tick).toBe(223347);
     expect(state.liquidity).toBe(1_000n);
     expect(readContract).toHaveBeenCalledWith(
-      expect.objectContaining({address: IDENTITY.address, functionName: 'slot0'}),
+      expect.objectContaining({
+        address: IDENTITY.address,
+        functionName: 'slot0',
+      }),
     );
   });
 

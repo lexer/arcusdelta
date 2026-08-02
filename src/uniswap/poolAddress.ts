@@ -60,7 +60,9 @@ export class PoolNotCreatedError extends Error {
 export function orderTokens(a: Hex, b: Hex): [Hex, Hex] {
   const left = getAddress(a);
   const right = getAddress(b);
-  return left.toLowerCase() < right.toLowerCase() ? [left, right] : [right, left];
+  return left.toLowerCase() < right.toLowerCase()
+    ? [left, right]
+    : [right, left];
 }
 
 /**

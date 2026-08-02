@@ -58,6 +58,44 @@ export function accruedFees(
   };
 }
 
+/**
+ * Splits a v3 pool's global fee growth into the amount attributable "inside"
+ * a tick range, transcribed from Uniswap's own `Tick.getFeeGrowthInside`
+ * (v3-core `Tick.sol`). v4 exposes this as a single StateView call; v3 has no
+ * equivalent lens, so it is computed here from the global accumulator and the
+ * outside growth recorded at each tick boundary.
+ *
+ * All arithmetic is modulo 2^256, matching the pool's own unchecked math.
+ */
+export function computeFeeGrowthInside(
+  tickCurrent: number,
+  tickLower: number,
+  tickUpper: number,
+  feeGrowthGlobal0X128: bigint,
+  feeGrowthGlobal1X128: bigint,
+  lowerFeeGrowthOutside0X128: bigint,
+  lowerFeeGrowthOutside1X128: bigint,
+  upperFeeGrowthOutside0X128: bigint,
+  upperFeeGrowthOutside1X128: bigint,
+): {feeGrowthInside0X128: bigint; feeGrowthInside1X128: bigint} {
+  const wrap = (value: bigint): bigint => ((value % U256) + U256) % U256;
+
+  const below = (global: bigint, outside: bigint): bigint =>
+    tickCurrent >= tickLower ? outside : wrap(global - outside);
+  const above = (global: bigint, outside: bigint): bigint =>
+    tickCurrent < tickUpper ? outside : wrap(global - outside);
+
+  const below0 = below(feeGrowthGlobal0X128, lowerFeeGrowthOutside0X128);
+  const above0 = above(feeGrowthGlobal0X128, upperFeeGrowthOutside0X128);
+  const below1 = below(feeGrowthGlobal1X128, lowerFeeGrowthOutside1X128);
+  const above1 = above(feeGrowthGlobal1X128, upperFeeGrowthOutside1X128);
+
+  return {
+    feeGrowthInside0X128: wrap(feeGrowthGlobal0X128 - below0 - above0),
+    feeGrowthInside1X128: wrap(feeGrowthGlobal1X128 - below1 - above1),
+  };
+}
+
 /** Atoms of a token expressed in whole USDG units. */
 export function valueInUsdg(
   stockAtoms: bigint,

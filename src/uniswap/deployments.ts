@@ -1,5 +1,5 @@
 /**
- * Uniswap v4 deployment addresses on Robinhood Chain mainnet.
+ * Uniswap v3 deployment addresses on Robinhood Chain mainnet.
  *
  * Every address below was verified to return contract code via eth_getCode
  * against https://rpc.mainnet.chain.robinhood.com, not taken from docs alone.
@@ -7,35 +7,28 @@
 
 import type {Hex} from 'viem';
 
-export interface V4Deployment {
-  readonly poolManager: Hex;
+export interface V3Deployment {
+  readonly factory: Hex;
   readonly positionManager: Hex;
-  readonly stateView: Hex;
-  readonly quoter: Hex;
-  readonly universalRouter: Hex;
-  readonly permit2: Hex;
+  readonly swapRouter02: Hex;
+  readonly quoterV2: Hex;
 }
 
-const ROBINHOOD_MAINNET: V4Deployment = {
-  poolManager: '0x8366a39CC670B4001A1121B8F6A443A643e40951',
-  positionManager: '0x58daec3116aae6D93017bAAea7749052E8a04fA7',
-  stateView: '0xF3334192D15450CdD385c8B70e03f9A6bD9E673b',
-  quoter: '0x8Dc178eFB8111BB0973Dd9d722ebeFF267c98F94',
-  universalRouter: '0x8876789976dEcBfCbBbe364623C63652db8C0904',
-  permit2: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
+const ROBINHOOD_MAINNET: V3Deployment = {
+  factory: '0x1f7d7550B1b028f7571E69A784071F0205FD2EfA',
+  positionManager: '0x73991a25C818Bf1f1128dEAaB1492D45638DE0D3',
+  swapRouter02: '0xCaf681a66D020601342297493863E78C959E5cb2',
+  quoterV2: '0x33e885eD0Ec9bF04EcfB19341582aADCb4c8A9E7',
 };
 
-const BY_CHAIN_ID: ReadonlyMap<number, V4Deployment> = new Map([
+const BY_CHAIN_ID: ReadonlyMap<number, V3Deployment> = new Map([
   [4663, ROBINHOOD_MAINNET],
 ]);
 
-export function getV4Deployment(chainId: number): V4Deployment {
+export function getV3Deployment(chainId: number): V3Deployment {
   const deployment = BY_CHAIN_ID.get(chainId);
   if (!deployment) {
-    throw new Error(`No Uniswap v4 deployment configured for chain ${chainId}`);
+    throw new Error(`No Uniswap v3 deployment configured for chain ${chainId}`);
   }
   return deployment;
 }
-
-/** The zero address, used as the hooks slot for a pool with no hooks. */
-export const NO_HOOKS: Hex = '0x0000000000000000000000000000000000000000';

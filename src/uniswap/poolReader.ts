@@ -1,93 +1,81 @@
 /**
- * Reads live pool state through the v4 StateView lens contract.
+ * Reads live state directly from a v3 pool contract.
  *
- * v4 keeps pool state in the PoolManager singleton's transient-friendly
- * storage; StateView is the read-only accessor for it.
+ * Unlike v4's singleton PoolManager plus a StateView lens, each v3 pool is
+ * its own contract, so state comes straight from the pool `resolvePoolIdentity`
+ * already resolved.
  */
 
 import type {Hex, PublicClient} from 'viem';
-import {getV4Deployment} from './deployments.js';
-import {toPoolId, type PoolKey} from './poolKey.js';
+import type {PoolIdentity} from './poolAddress.js';
 
-export const STATE_VIEW_ABI = [
+export const POOL_STATE_ABI = [
   {
     type: 'function',
-    name: 'getSlot0',
+    name: 'slot0',
     stateMutability: 'view',
-    inputs: [{name: 'poolId', type: 'bytes32'}],
+    inputs: [],
     outputs: [
       {name: 'sqrtPriceX96', type: 'uint160'},
       {name: 'tick', type: 'int24'},
-      {name: 'protocolFee', type: 'uint24'},
-      {name: 'lpFee', type: 'uint24'},
+      {name: 'observationIndex', type: 'uint16'},
+      {name: 'observationCardinality', type: 'uint16'},
+      {name: 'observationCardinalityNext', type: 'uint16'},
+      {name: 'feeProtocol', type: 'uint8'},
+      {name: 'unlocked', type: 'bool'},
     ],
   },
   {
     type: 'function',
-    name: 'getLiquidity',
+    name: 'liquidity',
     stateMutability: 'view',
-    inputs: [{name: 'poolId', type: 'bytes32'}],
-    outputs: [{name: 'liquidity', type: 'uint128'}],
+    inputs: [],
+    outputs: [{type: 'uint128'}],
   },
 ] as const;
 
 export class PoolNotInitializedError extends Error {
-  readonly poolId: Hex;
-
-  constructor(poolId: Hex, key: PoolKey) {
+  constructor(readonly poolAddress: Hex) {
     super(
-      `Pool ${poolId} is not initialized (currency0=${key.currency0}, ` +
-        `currency1=${key.currency1}, fee=${key.fee}, tickSpacing=${key.tickSpacing}). ` +
-        'Check POOL_FEE and POOL_TICK_SPACING match a live pool.',
+      `Pool ${poolAddress} exists but was never initialized with a starting price.`,
     );
     this.name = 'PoolNotInitializedError';
-    this.poolId = poolId;
   }
 }
 
 export interface PoolState {
-  readonly poolId: Hex;
+  readonly poolAddress: Hex;
   readonly sqrtPriceX96: bigint;
   readonly tick: number;
-  readonly lpFee: number;
   readonly liquidity: bigint;
 }
 
 export interface PoolReader {
-  readState(key: PoolKey): Promise<PoolState>;
+  readState(identity: PoolIdentity): Promise<PoolState>;
 }
 
-export function createPoolReader(
-  client: PublicClient,
-  chainId: number,
-): PoolReader {
-  const stateView = getV4Deployment(chainId).stateView;
-
+export function createPoolReader(client: PublicClient): PoolReader {
   return {
-    async readState(key: PoolKey): Promise<PoolState> {
-      const poolId = toPoolId(key);
-
+    async readState(identity: PoolIdentity): Promise<PoolState> {
       const [slot0, liquidity] = await Promise.all([
         client.readContract({
-          address: stateView,
-          abi: STATE_VIEW_ABI,
-          functionName: 'getSlot0',
-          args: [poolId],
+          address: identity.address,
+          abi: POOL_STATE_ABI,
+          functionName: 'slot0',
         }),
         client.readContract({
-          address: stateView,
-          abi: STATE_VIEW_ABI,
-          functionName: 'getLiquidity',
-          args: [poolId],
+          address: identity.address,
+          abi: POOL_STATE_ABI,
+          functionName: 'liquidity',
         }),
       ]);
 
-      const [sqrtPriceX96, tick, , lpFee] = slot0;
+      const [sqrtPriceX96, tick] = slot0;
       if (sqrtPriceX96 === 0n) {
-        throw new PoolNotInitializedError(poolId, key);
+        throw new PoolNotInitializedError(identity.address);
       }
 
-      return {poolId, sqrtPriceX96, tick, lpFee, liquidity};
+      return {poolAddress: identity.address, sqrtPriceX96, tick, liquidity};
     },
   };
 }

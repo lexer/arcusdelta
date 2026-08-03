@@ -35,6 +35,7 @@ Fill in `.env`. `SEED` is the production wallet mnemonic and has no default; eve
 | `CLOSE_SLIPPAGE_BPS` | `100` |
 | `TWAP_CHUNKS` | `1` (disabled) |
 | `TWAP_INTERVAL_SECONDS` | `10` |
+| `MAX_PRICE_IMPACT_BPS` | `100` (1%) |
 
 Fill in `symbols.json` — the list of stock tokens the bot trades. Each entry needs at minimum a `symbol` and `stockTokenAddress`; every other field is optional and falls back to the corresponding `.env` default above when omitted:
 
@@ -69,6 +70,16 @@ Every Arcus trade — a buy in `npm run buy`/`npm run cycle`, or the post-exit s
 
 If a chunk fails after earlier ones already settled, the command reports exactly how many chunks filled before stopping — real funds already moved for those, so this is never folded into a generic failure that could be misread as "nothing happened."
 
+## Price impact gate
+
+Every buy attempt — the whole trade, or each TWAP chunk of it — is checked against a small reference quote for the same pair requested fresh alongside it (1% of that attempt's size). If the trade's price has moved more than `maxPriceImpactBps` versus that reference, it's refused before anything is signed. Set it per symbol in `symbols.json`, or `MAX_PRICE_IMPACT_BPS` in `.env` as the default (100 bps / 1%):
+
+```jsonc
+{"symbol": "AAPL", "stockTokenAddress": "0x...", "maxPriceImpactBps": 75}
+```
+
+Unlike TWAP, this is on by default — the confirmation summary always shows `max impact N bps` per symbol. It's buy-only; the post-exit sell in `npm run exit`/`npm run monitor` isn't gated by it. A breach mid-TWAP-sequence is reported the same way a chunk failing for any other reason is — how many chunks already filled, so it's never mistaken for a clean no-op.
+
 ## Read-only previews
 
 ```sh
@@ -87,7 +98,7 @@ None of these sign, approve, or mint. They run the same code paths the spending 
 npm run buy
 ```
 
-Buys every selected symbol on Arcus, then opens each liquidity position. The two steps are confirmed **separately**, because deposit amounts cannot be known until the buys settle. Each prompt prints the real figures for every symbol and waits for you to type `yes`; anything else aborts the whole batch. A symbol with `twapChunks > 1` splits its buy into that many chunks — see [TWAP execution](#twap-execution).
+Buys every selected symbol on Arcus, then opens each liquidity position. The two steps are confirmed **separately**, because deposit amounts cannot be known until the buys settle. Each prompt prints the real figures for every symbol and waits for you to type `yes`; anything else aborts the whole batch. A symbol with `twapChunks > 1` splits its buy into that many chunks — see [TWAP execution](#twap-execution) — and every buy attempt is checked against [the price impact gate](#price-impact-gate).
 
 - `--symbol <ticker>` narrows to one symbol.
 - `--no-deposit` stops after the buys.

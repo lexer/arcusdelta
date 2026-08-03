@@ -1,6 +1,6 @@
 # 0009 — Price impact gate on buys
 
-Status: in progress
+Status: complete
 
 ## Context
 

@@ -12,6 +12,8 @@ The Arcus buy delivers the **plain** stock token — the same one the pool uses 
 
 **TWAP execution** (plan 0008). Any buy or the post-close sell can split into `twapChunks` pieces, `twapIntervalSeconds` apart, each with its own fresh quote — configured the same way as every other strategy field, per symbol in `symbols.json` falling back to `.env`. This lives entirely inside `SpotSwapService`: `BuyRequest`/`SellRequest` carry the two fields, and `executeBuy`/`executeSell` split the total, quote and settle each chunk in sequence, and aggregate the results (see the "TWAP execution" section below for the mechanics).
 
+**Price impact gate** (plan 0009). Every buy attempt — the whole trade, or each TWAP chunk of it — is checked against a small reference quote for the same pair before it is signed, and refused if its price has moved more than `maxPriceImpactBps` versus that reference. Buy-only, on by default (see the "Price impact gate" section below).
+
 ## Modules
 
 | Module | Purpose |
@@ -48,7 +50,7 @@ Every command below defaults to acting on every symbol in `symbols.json`, narrow
 | --- | --- |
 | `npm run quote` | Read-only. Resolves tokens, quotes, and validates for each selected symbol, then stops. |
 | `npm run position` | Read-only. Reads each selected symbol's pool and balances, computes the range and both legs, then stops. |
-| `npm run buy` | Buys, then deposits, for each selected symbol. Two separate confirmations, each covering the whole batch. `--no-deposit` stops after the buys. |
+| `npm run buy` | Buys, then deposits, for each selected symbol. Two separate confirmations, each covering the whole batch. `--no-deposit` stops after the buys. Each buy is gated on price impact. |
 | `npm run deposit` | Opens a position for each selected symbol from the balance already held. |
 | `npm run monitor` | Long-running. Watches every selected symbol's pool in one process; closes positions that go one-sided and sells the stock token. `--dry-run` sends nothing. |
 | `npm run exit` | Withdraws liquidity, claims fees, and sells the stock token, across every selected symbol's positions. One confirmation covers the batch; `--dry-run` sends nothing. |
@@ -77,6 +79,26 @@ Splitting happens inside `SpotSwapService`, not as a wrapper around `executeBuy`
 `BuyResult.txHashes` is one hash per chunk (a single-element array when TWAP is off); `sellAmount`/`buyAmount`/`minBuyAmount` are true sums across chunks — `buyAmount` in particular is *more* accurate than a single pre-trade quote, since it's the sum of what each chunk's own quote actually promised. `orderId` is only meaningful for a single-chunk trade and is `undefined` when chunked.
 
 If a chunk fails after earlier ones already settled, real funds already moved for those — this must never look like a clean, all-or-nothing failure. `ArcusTwapPartialFillError` carries every completed chunk's hash and amounts plus the failed chunk's index, and both `buyCommand.ts` and `exitCommand.ts` report it explicitly ("N of M chunks already filled/sold — do not retry blindly") rather than folding it into a generic error message. A chunk count that would round any chunk to zero atoms is rejected up front via `ArcusTwapConfigError`, before anything is signed.
+
+## Price impact gate
+
+`maxPriceImpactBps` (default 100 = 1%) refuses a buy — or a TWAP chunk of one — whose price has moved too far from a reference. The reference is a small quote requested from Arcus *itself*, alongside the real one, for 1% of that attempt's size (floored at 1 atom):
+
+```mermaid
+graph TD
+    Q[quote for the real trade size] --> P{impactBps > maxPriceImpactBps?}
+    R[quote for 1% reference size] --> P
+    P -->|no| S[settle: sign, submit, poll]
+    P -->|yes| E[ArcusPriceImpactError — nothing signed]
+```
+
+```
+impactBps = (tradePrice - referencePrice) / referencePrice * 10_000
+```
+
+Deliberately **not** the Uniswap pool's spot price: comparing two Arcus quotes for the same pair keeps the check correct even if Arcus routes the small and large sizes through different venues, and it means the buy path never has to depend on Uniswap pool state (previously only the exit/deposit paths did).
+
+The check lives in `executeSingle`, the one place both the un-chunked path and every `executeWithTwap` loop iteration already call — so it runs on every execution attempt without any special-casing for whether TWAP is on. A breach mid-TWAP-sequence therefore falls straight into the *existing* chunk-failure handling described above and comes out as `ArcusTwapPartialFillError`; a breach on an un-chunked trade (or the very first chunk) propagates as a plain `ArcusPriceImpactError`. `SellRequest` carries no such field — the gate is buy-only, so `executeSell` never requests a reference quote.
 
 ## Liquidity position
 
@@ -206,6 +228,7 @@ All extend `ArcusError` and carry the `tradeId`.
 | `ArcusPollTimeoutError` | No terminal state within the budget; may still land | Yes |
 | `ArcusTwapConfigError` | `twapChunks` too high for the trade size (a chunk would be zero atoms) | No |
 | `ArcusTwapPartialFillError` | A TWAP chunk failed after earlier ones already settled; carries what filled | Chunks up to the failure |
+| `ArcusPriceImpactError` | A buy's (or chunk's) price impact exceeds `maxPriceImpactBps` | No |
 
 ## Not yet built
 

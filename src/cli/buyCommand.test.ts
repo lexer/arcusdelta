@@ -16,6 +16,7 @@ const NVDA_ITEM: BuyRequestItem = {
   slippageBps: 1,
   twapChunks: 1,
   twapIntervalSeconds: 10,
+  maxPriceImpactBps: 100,
 };
 
 const AAPL_ITEM: BuyRequestItem = {
@@ -25,6 +26,7 @@ const AAPL_ITEM: BuyRequestItem = {
   slippageBps: 5,
   twapChunks: 1,
   twapIntervalSeconds: 10,
+  maxPriceImpactBps: 100,
 };
 
 function makeResult(overrides: Record<string, unknown> = {}) {
@@ -90,6 +92,29 @@ describe('confirmation gate', () => {
         buyToken: AAPL_ITEM.stockTokenAddress,
         sellAmount: '50',
         slippageBps: 5,
+      }),
+    );
+  });
+
+  it('passes each symbol its own TWAP and price impact configuration', async () => {
+    const subject = deps({
+      items: [
+        {
+          ...NVDA_ITEM,
+          twapChunks: 4,
+          twapIntervalSeconds: 15,
+          maxPriceImpactBps: 25,
+        },
+      ],
+    });
+
+    await runBuyCommand(subject);
+
+    expect(subject.executeBuy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        twapChunks: 4,
+        twapIntervalSeconds: 15,
+        maxPriceImpactBps: 25,
       }),
     );
   });
@@ -175,6 +200,7 @@ describe('buildBuySummary', () => {
     expect(summary).toContain('AAPL');
     expect(summary).toContain('50 USDG');
     expect(summary).toContain('5 bps');
+    expect(summary).toContain('max impact 100 bps');
     expect(summary).toContain('PRODUCTION');
   });
 

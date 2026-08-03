@@ -64,6 +64,7 @@ async function main(): Promise<number> {
       slippageBps: s.slippageBps,
       twapChunks: s.twapChunks,
       twapIntervalSeconds: s.twapIntervalSeconds,
+      maxPriceImpactBps: s.maxPriceImpactBps,
     }));
 
     const bought = await runBuyCommand({

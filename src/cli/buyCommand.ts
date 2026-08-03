@@ -18,6 +18,7 @@ export interface BuyRequestItem {
   readonly slippageBps: number;
   readonly twapChunks: number;
   readonly twapIntervalSeconds: number;
+  readonly maxPriceImpactBps: number;
 }
 
 /** Per-symbol outcome. Exactly one of `result`/`error` is set. */
@@ -61,7 +62,7 @@ export function buildBuySummary(
         ? `  (TWAP: ${item.twapChunks} chunks, ${item.twapIntervalSeconds}s apart)`
         : '';
     lines.push(
-      `  ${item.symbol}  spend ${item.usdgBuyAmount} ${deps.sellSymbol} -> ${item.stockTokenAddress}  slippage ${item.slippageBps} bps${twap}`,
+      `  ${item.symbol}  spend ${item.usdgBuyAmount} ${deps.sellSymbol} -> ${item.stockTokenAddress}  slippage ${item.slippageBps} bps  max impact ${item.maxPriceImpactBps} bps${twap}`,
     );
   }
 
@@ -100,6 +101,7 @@ export async function runBuyCommand(
         slippageBps: item.slippageBps,
         twapChunks: item.twapChunks,
         twapIntervalSeconds: item.twapIntervalSeconds,
+        maxPriceImpactBps: item.maxPriceImpactBps,
       });
       outcomes.push({symbol: item.symbol, result});
 

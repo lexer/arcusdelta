@@ -40,6 +40,7 @@ export interface Config {
   readonly closeSlippageBps: number;
   readonly twapChunks: number;
   readonly twapIntervalSeconds: number;
+  readonly maxPriceImpactBps: number;
 }
 
 export type EnvSource = Record<string, string | undefined>;
@@ -75,6 +76,7 @@ export function loadConfig(source: EnvSource = readDotenv()): Config {
     closeSlippageBps: env.CLOSE_SLIPPAGE_BPS,
     twapChunks: env.TWAP_CHUNKS,
     twapIntervalSeconds: env.TWAP_INTERVAL_SECONDS,
+    maxPriceImpactBps: env.MAX_PRICE_IMPACT_BPS,
   });
 }
 
@@ -95,5 +97,6 @@ export function loggableConfig(config: Config): Record<string, unknown> {
     closeSlippageBps: config.closeSlippageBps,
     twapChunks: config.twapChunks,
     twapIntervalSeconds: config.twapIntervalSeconds,
+    maxPriceImpactBps: config.maxPriceImpactBps,
   };
 }

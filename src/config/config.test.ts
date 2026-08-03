@@ -49,6 +49,18 @@ describe('loadConfig', () => {
     expect(() => loadConfig(validEnv({TWAP_CHUNKS: '0'}))).toThrow(ConfigError);
   });
 
+  it('applies the price impact default', () => {
+    const config = loadConfig(validEnv());
+
+    expect(config.maxPriceImpactBps).toBe(100);
+  });
+
+  it('rejects a price impact threshold outside the basis-point range', () => {
+    expect(() => loadConfig(validEnv({MAX_PRICE_IMPACT_BPS: '10001'}))).toThrow(
+      ConfigError,
+    );
+  });
+
   it('rejects a zero exit confirmation count', () => {
     expect(() => loadConfig(validEnv({EXIT_CONFIRMATIONS: '0'}))).toThrow(
       ConfigError,

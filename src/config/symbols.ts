@@ -26,6 +26,7 @@ export interface SymbolConfig {
   readonly closeSlippageBps: number;
   readonly twapChunks: number;
   readonly twapIntervalSeconds: number;
+  readonly maxPriceImpactBps: number;
 }
 
 function resolveEntry(entry: SymbolEntry, defaults: Config): SymbolConfig {
@@ -55,6 +56,7 @@ function resolveEntry(entry: SymbolEntry, defaults: Config): SymbolConfig {
     twapChunks: entry.twapChunks ?? defaults.twapChunks,
     twapIntervalSeconds:
       entry.twapIntervalSeconds ?? defaults.twapIntervalSeconds,
+    maxPriceImpactBps: entry.maxPriceImpactBps ?? defaults.maxPriceImpactBps,
   };
 }
 

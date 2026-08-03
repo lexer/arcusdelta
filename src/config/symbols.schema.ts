@@ -26,6 +26,7 @@ export const symbolEntrySchema = z.object({
   closeSlippageBps: z.coerce.number().int().min(0).max(10_000).optional(),
   twapChunks: z.coerce.number().int().positive().optional(),
   twapIntervalSeconds: z.coerce.number().int().positive().optional(),
+  maxPriceImpactBps: z.coerce.number().int().min(0).max(10_000).optional(),
 });
 
 export const symbolsFileSchema = z.array(symbolEntrySchema);

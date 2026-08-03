@@ -10,6 +10,7 @@
     "poolFee": 3000,
     "rangeDeviationPercent": 3,
     "twapChunks": 4,
-    "twapIntervalSeconds": 15
+    "twapIntervalSeconds": 15,
+    "maxPriceImpactBps": 75
   }
 ]

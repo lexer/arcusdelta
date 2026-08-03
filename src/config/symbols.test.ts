@@ -45,6 +45,7 @@ describe('loadSymbols', () => {
       exitConfirmations: 3,
       twapChunks: 1,
       twapIntervalSeconds: 10,
+      maxPriceImpactBps: 100,
     });
   });
 
@@ -62,6 +63,14 @@ describe('loadSymbols', () => {
 
     expect(resolved!.twapChunks).toBe(4);
     expect(resolved!.twapIntervalSeconds).toBe(15);
+  });
+
+  it('lets a per-symbol price impact threshold override the default', () => {
+    write([{symbol: 'NVDA', stockTokenAddress: NVDA, maxPriceImpactBps: 25}]);
+
+    const [resolved] = loadSymbols(filePath, defaults());
+
+    expect(resolved!.maxPriceImpactBps).toBe(25);
   });
 
   it('lets a per-symbol field override the default', () => {

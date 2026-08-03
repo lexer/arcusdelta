@@ -61,6 +61,12 @@ export const envSchema = z.object({
    */
   TWAP_CHUNKS: z.coerce.number().int().positive().default(1),
   TWAP_INTERVAL_SECONDS: z.coerce.number().int().positive().default(10),
+
+  /**
+   * Refuse a buy (or TWAP chunk of one) whose price impact — vs a small
+   * reference quote for the same pair — exceeds this many basis points.
+   */
+  MAX_PRICE_IMPACT_BPS: z.coerce.number().int().min(0).max(10_000).default(100),
 });
 
 export type Env = z.infer<typeof envSchema>;

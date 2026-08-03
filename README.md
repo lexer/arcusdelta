@@ -72,13 +72,13 @@ If a chunk fails after earlier ones already settled, the command reports exactly
 
 ## Price impact gate
 
-Every buy attempt — the whole trade, or each TWAP chunk of it — is checked against a small reference quote for the same pair requested fresh alongside it (1% of that attempt's size). If the trade's price has moved more than `maxPriceImpactBps` versus that reference, it's refused before anything is signed. Set it per symbol in `symbols.json`, or `MAX_PRICE_IMPACT_BPS` in `.env` as the default (100 bps / 1%):
+Every buy attempt — the whole trade, or each TWAP chunk of it — is checked against Robinhood's own price feed for the asset (true exchange bid/ask, looked up by on-chain token address — not derived from Arcus or any DEX). If the trade's price has moved more than `maxPriceImpactBps` versus that reference's ask, it's refused before anything is signed. Set it per symbol in `symbols.json`, or `MAX_PRICE_IMPACT_BPS` in `.env` as the default (100 bps / 1%):
 
 ```jsonc
 {"symbol": "AAPL", "stockTokenAddress": "0x...", "maxPriceImpactBps": 75}
 ```
 
-Unlike TWAP, this is on by default — the confirmation summary always shows `max impact N bps` per symbol. It's buy-only; the post-exit sell in `npm run exit`/`npm run monitor` isn't gated by it. A breach mid-TWAP-sequence is reported the same way a chunk failing for any other reason is — how many chunks already filled, so it's never mistaken for a clean no-op.
+Unlike TWAP, this is on by default — the confirmation summary always shows `max impact N bps` per symbol. It's buy-only; the post-exit sell in `npm run exit`/`npm run monitor` isn't gated by it. If the reference price can't be verified — the feed lookup fails, or the asset is halted on the reference exchange — the buy is refused rather than skipping the check. A breach mid-TWAP-sequence is reported the same way a chunk failing for any other reason is — how many chunks already filled, so it's never mistaken for a clean no-op.
 
 ## Read-only previews
 

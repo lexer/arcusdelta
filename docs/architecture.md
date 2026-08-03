@@ -12,7 +12,7 @@ The Arcus buy delivers the **plain** stock token — the same one the pool uses 
 
 **TWAP execution** (plan 0008). Any buy or the post-close sell can split into `twapChunks` pieces, `twapIntervalSeconds` apart, each with its own fresh quote — configured the same way as every other strategy field, per symbol in `symbols.json` falling back to `.env`. This lives entirely inside `SpotSwapService`: `BuyRequest`/`SellRequest` carry the two fields, and `executeBuy`/`executeSell` split the total, quote and settle each chunk in sequence, and aggregate the results (see the "TWAP execution" section below for the mechanics).
 
-**Price impact gate** (plan 0009). Every buy attempt — the whole trade, or each TWAP chunk of it — is checked against a small reference quote for the same pair before it is signed, and refused if its price has moved more than `maxPriceImpactBps` versus that reference. Buy-only, on by default (see the "Price impact gate" section below).
+**Price impact gate** (plan 0009, reference source revised in plan 0010). Every buy attempt — the whole trade, or each TWAP chunk of it — is checked against a reference price before it is signed, and refused if its price has moved more than `maxPriceImpactBps` versus that reference. Buy-only, on by default. The reference is Robinhood's own price feed (true exchange bid/ask, looked up by on-chain token address), not a synthetic quote from Arcus itself (see the "Price impact gate" section below).
 
 ## Modules
 
@@ -24,6 +24,7 @@ The Arcus buy delivers the **plain** stock token — the same one the pool uses 
 | `arcus/` | Token resolution from the router list, typed errors, and `SpotSwapService` — the quote → sign → submit → poll flow, parameterized per buy request rather than per symbol. |
 | `uniswap/` | v3 deployment addresses, pool address resolution (`poolAddress.ts`), tick and liquidity math, pool reads, range calculation, plain ERC20 approvals (`erc20.ts`), mint/close/discovery/fees, the deposit and exit orchestration, and `positionMonitor.ts` watching every configured symbol's pool in one loop. |
 | `pnl/` | Profit and loss: pure arithmetic in `pnlCalculator.ts`, chain reconstruction in `pnlReporter.ts`, one report per symbol. |
+| `prices/` | A true-market price oracle independent of any DEX or router. `robinhoodPriceFeed.ts` resolves a token's exchange bid/ask by on-chain address from Robinhood's own public price feed — the reference the price impact gate compares an Arcus quote against. |
 | `di/` | The single composition root. `createDepositService`/`createExitService`/`createPnlReporter` each take a `SymbolConfig` and build a service scoped to that symbol's pool; `createMonitor` takes the whole selected list and builds one `PositionMonitor` watching all of them. |
 | `cli/` | `buyCommand.ts`, `depositCommand.ts`, and `exitCommand.ts` hold the command logic (IO-free, so the confirmation gates are testable) — each takes a list of per-symbol request items, plans every one, shows one combined summary, takes one confirmation, then executes each independently so one symbol's failure doesn't lose track of the rest. `symbolSelection.ts` loads `symbols.json` and narrows it to `--symbol`, shared by every entrypoint. `buy.ts`, `quote.ts`, `deposit.ts`, `position.ts`, `exit.ts`, `monitor.ts`, `cycle.ts`, and `pnl.ts` are thin entrypoints. |
 
@@ -82,12 +83,12 @@ If a chunk fails after earlier ones already settled, real funds already moved fo
 
 ## Price impact gate
 
-`maxPriceImpactBps` (default 100 = 1%) refuses a buy — or a TWAP chunk of one — whose price has moved too far from a reference. The reference is a small quote requested from Arcus *itself*, alongside the real one, for 1% of that attempt's size (floored at 1 atom):
+`maxPriceImpactBps` (default 100 = 1%) refuses a buy — or a TWAP chunk of one — whose price has moved too far from a reference. The reference comes from `PriceFeed.getPrice(chainId, tokenAddress)`, backed by `createRobinhoodPriceFeed()` — Robinhood's own price feed for its tokenized assets, fetched fresh for every check:
 
 ```mermaid
 graph TD
-    Q[quote for the real trade size] --> P{impactBps > maxPriceImpactBps?}
-    R[quote for 1% reference size] --> P
+    Q[Arcus quote for the trade] --> P{impactBps > maxPriceImpactBps?}
+    F[PriceFeed.getPrice: Robinhood ask] --> P
     P -->|no| S[settle: sign, submit, poll]
     P -->|yes| E[ArcusPriceImpactError — nothing signed]
 ```
@@ -96,9 +97,11 @@ graph TD
 impactBps = (tradePrice - referencePrice) / referencePrice * 10_000
 ```
 
-Deliberately **not** the Uniswap pool's spot price: comparing two Arcus quotes for the same pair keeps the check correct even if Arcus routes the small and large sizes through different venues, and it means the buy path never has to depend on Uniswap pool state (previously only the exit/deposit paths did).
+`referencePrice` is the feed's **ask** — the side a buyer actually crosses, so a trade with no size-driven impact reads as ~0 bps rather than half the bid/ask spread. `tradePrice` is the Arcus quote's own sell/buy ratio, decimal-normalized (`effectivePrice`). USDG is treated 1:1 with USD, same as everywhere else in the codebase.
 
-The check lives in `executeSingle`, the one place both the un-chunked path and every `executeWithTwap` loop iteration already call — so it runs on every execution attempt without any special-casing for whether TWAP is on. A breach mid-TWAP-sequence therefore falls straight into the *existing* chunk-failure handling described above and comes out as `ArcusTwapPartialFillError`; a breach on an un-chunked trade (or the very first chunk) propagates as a plain `ArcusPriceImpactError`. `SellRequest` carries no such field — the gate is buy-only, so `executeSell` never requests a reference quote.
+Deliberately **not** a synthetic quote from Arcus itself (plan 0009's original approach) or the Uniswap pool's spot price: Robinhood's feed is a true, independent exchange price, so the check reflects reality regardless of how Arcus routes the trade internally, and it means the buy path never has to depend on Uniswap pool state (previously only the exit/deposit paths did). If the feed lookup fails, the asset isn't listed, or `isTradingHalt` is true, the buy is refused via `ArcusPriceFeedError` — "cannot verify" fails closed, the same posture as an actual breach.
+
+The check lives in `executeSingle`, the one place both the un-chunked path and every `executeWithTwap` loop iteration already call — so it runs on every execution attempt without any special-casing for whether TWAP is on. A breach mid-TWAP-sequence therefore falls straight into the *existing* chunk-failure handling described above and comes out as `ArcusTwapPartialFillError`; a breach on an un-chunked trade (or the very first chunk) propagates as a plain `ArcusPriceImpactError`. `SellRequest` carries no such field — the gate is buy-only, so `executeSell` never calls the price feed.
 
 ## Liquidity position
 
@@ -229,6 +232,7 @@ All extend `ArcusError` and carry the `tradeId`.
 | `ArcusTwapConfigError` | `twapChunks` too high for the trade size (a chunk would be zero atoms) | No |
 | `ArcusTwapPartialFillError` | A TWAP chunk failed after earlier ones already settled; carries what filled | Chunks up to the failure |
 | `ArcusPriceImpactError` | A buy's (or chunk's) price impact exceeds `maxPriceImpactBps` | No |
+| `ArcusPriceFeedError` | Reference price unavailable — feed lookup failed, unlisted, or halted | No |
 
 ## Not yet built
 

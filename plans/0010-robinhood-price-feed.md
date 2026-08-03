@@ -1,6 +1,6 @@
 # 0010 — Robinhood price feed as the price impact reference
 
-Status: in progress
+Status: complete
 
 ## Context
 

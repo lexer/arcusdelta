@@ -10,6 +10,7 @@ import {
   ArcusExecutionFailedError,
   ArcusPermitError,
   ArcusPollTimeoutError,
+  ArcusPriceImpactError,
   ArcusQuoteError,
   ArcusSubmissionError,
   ArcusTwapConfigError,
@@ -296,6 +297,15 @@ describe('executeSell', () => {
     await expect(service.executeSell(sellRequest)).rejects.toThrow(
       ArcusQuoteError,
     );
+  });
+
+  it('never checks price impact — SellRequest has no threshold to check against', async () => {
+    const {service, router} = sellHarness();
+
+    await service.executeSell(sellRequest);
+
+    // One quote for the trade itself; no second reference quote requested.
+    expect(router.getQuote).toHaveBeenCalledOnce();
   });
 });
 
@@ -673,5 +683,130 @@ describe('TWAP chunking', () => {
     expect(requestedAmounts.reduce((sum, a) => sum + BigInt(a), 0n)).toBe(
       500_000_000_000_000_000n,
     );
+  });
+});
+
+describe('price impact gate', () => {
+  // 1% of SELL_ATOMS ('100000000'), matching SpotSwapService's own
+  // reference-amount calculation.
+  const REFERENCE_ATOMS = '1000000';
+
+  /** buyAmount atoms such that the resulting quote prices at `price` USDG per NVDA. */
+  function buyAtomsForPrice(sellAtoms: string, price: number): string {
+    return BigInt(Math.round((Number(sellAtoms) * 1e12) / price)).toString();
+  }
+
+  /** Prices the reference-sized quote at `referencePrice`, everything else at `tradePrice`. */
+  function priceImpactRouter(
+    router: Harness['router'],
+    referencePrice: number,
+    tradePrice: number,
+  ) {
+    router.getQuote.mockImplementation(req => {
+      const price =
+        req.sellAmount === REFERENCE_ATOMS ? referencePrice : tradePrice;
+      const buyAmount = buyAtomsForPrice(req.sellAmount, price);
+      return Promise.resolve({
+        recommended: 'arcus',
+        all: [
+          makeQuote({
+            sellAmount: req.sellAmount,
+            buyAmount,
+            arcus: {minAmountOut: buyAmount},
+          }),
+        ],
+      });
+    });
+  }
+
+  it('executes normally when price impact is within the threshold', async () => {
+    const {service, router} = harness();
+    priceImpactRouter(router, 200, 200.1); // ~5 bps, under the 100 bps threshold
+
+    const result = await service.executeBuy({
+      ...request,
+      maxPriceImpactBps: 100,
+    });
+
+    expect(router.getQuote).toHaveBeenCalledTimes(2);
+    expect(router.getQuote).toHaveBeenCalledWith(
+      expect.objectContaining({sellAmount: REFERENCE_ATOMS}),
+    );
+    expect(result.txHashes).toEqual([TX_HASH]);
+  });
+
+  it('refuses an un-chunked buy whose price impact exceeds the threshold', async () => {
+    const {service, router} = harness();
+    priceImpactRouter(router, 200, 204); // 2% = 200 bps, over the 100 bps threshold
+
+    const failure = await service
+      .executeBuy({...request, maxPriceImpactBps: 100})
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ArcusPriceImpactError);
+    const error = failure as ArcusPriceImpactError;
+    expect(error.maxPriceImpactBps).toBe(100);
+    expect(error.priceImpactBps).toBeGreaterThan(100);
+    expect(signQuoteMock).not.toHaveBeenCalled();
+  });
+
+  it('checks impact before every TWAP chunk, wrapping a mid-sequence breach in the existing partial-fill error', async () => {
+    const {service, router, sleep} = harness(
+      ['confirmed', 'confirmed'],
+      makePublicClient(),
+    );
+    // Chunks 1 and 2 trade at the reference price (no impact); chunk 3 does not.
+    let tradeCalls = 0;
+    router.getQuote.mockImplementation(req => {
+      let price: number;
+      if (req.sellAmount === '333333') {
+        price = 200; // every chunk's reference call
+      } else {
+        tradeCalls++;
+        price = tradeCalls <= 2 ? 200 : 400; // chunk 3 is 100% worse
+      }
+      const buyAmount = buyAtomsForPrice(req.sellAmount, price);
+      return Promise.resolve({
+        recommended: 'arcus',
+        all: [
+          makeQuote({
+            sellAmount: req.sellAmount,
+            buyAmount,
+            arcus: {minAmountOut: buyAmount},
+          }),
+        ],
+      });
+    });
+    router.submitSignedQuote
+      .mockResolvedValueOnce({
+        venue: 'arcus',
+        txHash: `0x${'11'.repeat(32)}`,
+        status: 'submitted',
+        orderId: ORDER_ID,
+      })
+      .mockResolvedValueOnce({
+        venue: 'arcus',
+        txHash: `0x${'22'.repeat(32)}`,
+        status: 'submitted',
+        orderId: ORDER_ID,
+      });
+
+    const failure = await service
+      .executeBuy({
+        ...request,
+        twapChunks: 3,
+        twapIntervalSeconds: 5,
+        maxPriceImpactBps: 100,
+      })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ArcusTwapPartialFillError);
+    const error = failure as ArcusTwapPartialFillError;
+    expect(error.failedChunk).toBe(3);
+    expect(error.totalChunks).toBe(3);
+    expect(error.completedChunks).toHaveLength(2);
+    // Chunk 3's submission is never reached — the breach is caught first.
+    expect(router.submitSignedQuote).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledTimes(2);
   });
 });

@@ -26,6 +26,7 @@ import type {Logger} from '../logging/logger.js';
 import {
   ArcusExecutionFailedError,
   ArcusPollTimeoutError,
+  ArcusPriceImpactError,
   ArcusQuoteError,
   ArcusSubmissionError,
   ArcusPermitError,
@@ -73,6 +74,29 @@ function splitIntoChunks(total: bigint, chunks: number): bigint[] {
 /** Sums atomic-unit decimal strings without going through floating point. */
 function sumAtoms(amounts: readonly string[]): string {
   return amounts.reduce((sum, amount) => sum + BigInt(amount), 0n).toString();
+}
+
+/**
+ * 1% of the trade, floored at 1 atom — small enough to approximate the price
+ * a trade of negligible size would get, used as the price impact baseline.
+ */
+function referenceSellAmount(totalAtoms: bigint): bigint {
+  const reference = totalAtoms / 100n;
+  return reference > 0n ? reference : 1n;
+}
+
+/**
+ * Sell units per buy unit, decimal-normalized. Display/comparison only —
+ * never used to size a trade or bound slippage, both of which stay in atoms.
+ */
+function effectivePrice(
+  quote: {sellAmount: string; buyAmount: string},
+  sellDecimals: number,
+  buyDecimals: number,
+): number {
+  const sell = Number(quote.sellAmount) / 10 ** sellDecimals;
+  const buy = Number(quote.buyAmount) / 10 ** buyDecimals;
+  return sell / buy;
 }
 
 /** One chunk's settled trade — the same shape a single, un-chunked trade returns. */
@@ -198,6 +222,7 @@ export class SpotSwapService {
       request.slippageBps,
       chunks,
       request.twapIntervalSeconds ?? 0,
+      request.maxPriceImpactBps,
       log,
     );
 
@@ -236,6 +261,8 @@ export class SpotSwapService {
       request.slippageBps,
       chunks,
       request.twapIntervalSeconds ?? 0,
+      // Price impact gating is buy-only; SellRequest has no such field.
+      undefined,
       log,
     );
 
@@ -253,13 +280,17 @@ export class SpotSwapService {
     return {sellToken, buyToken};
   }
 
-  /** Quote, validate, and settle exactly one trade of `sellAmountAtoms`. */
+  /**
+   * Quote, optionally gate on price impact, validate, and settle exactly one
+   * trade of `sellAmountAtoms`.
+   */
   private async executeSingle(
     tradeId: string,
     sellToken: TokenInfo,
     buyToken: TokenInfo,
     sellAmountAtoms: string,
     slippageBps: number,
+    maxPriceImpactBps: number | undefined,
     log: Logger,
   ): Promise<SingleTradeResult> {
     const quote = await this.quoteAndValidate(
@@ -270,6 +301,20 @@ export class SpotSwapService {
       slippageBps,
       log,
     );
+
+    if (maxPriceImpactBps !== undefined) {
+      await this.checkPriceImpact(
+        tradeId,
+        sellToken,
+        buyToken,
+        sellAmountAtoms,
+        slippageBps,
+        quote,
+        maxPriceImpactBps,
+        log,
+      );
+    }
+
     return this.settle(
       quote,
       tradeId,
@@ -277,6 +322,64 @@ export class SpotSwapService {
       buyToken.address,
       log,
     );
+  }
+
+  /**
+   * Refuses a trade whose price — vs a small reference quote for the same
+   * pair, requested fresh alongside it — has moved more than the configured
+   * threshold. The reference is 1% of this trade's size (see
+   * {@link referenceSellAmount}), not the Uniswap pool price, so this works
+   * even if Arcus routes the two sizes through different venues.
+   */
+  private async checkPriceImpact(
+    tradeId: string,
+    sellToken: TokenInfo,
+    buyToken: TokenInfo,
+    sellAmountAtoms: string,
+    slippageBps: number,
+    quote: ArcusFirmQuote,
+    maxPriceImpactBps: number,
+    log: Logger,
+  ): Promise<void> {
+    const referenceAtoms = referenceSellAmount(BigInt(sellAmountAtoms));
+    const referenceQuote = await this.fetchQuote(
+      tradeId,
+      sellToken,
+      buyToken,
+      referenceAtoms.toString(),
+      slippageBps,
+      log,
+    );
+
+    const tradePrice = effectivePrice(
+      quote,
+      sellToken.decimals,
+      buyToken.decimals,
+    );
+    const referencePrice = effectivePrice(
+      referenceQuote,
+      sellToken.decimals,
+      buyToken.decimals,
+    );
+    const impactBps = ((tradePrice - referencePrice) / referencePrice) * 10_000;
+
+    log.info(
+      {tradePrice, referencePrice, impactBps, maxPriceImpactBps},
+      'price impact checked',
+    );
+
+    if (impactBps > maxPriceImpactBps) {
+      log.error(
+        {impactBps, maxPriceImpactBps},
+        'price impact exceeds threshold',
+      );
+      throw new ArcusPriceImpactError(
+        `Price impact ${impactBps.toFixed(2)} bps exceeds the ${maxPriceImpactBps} bps threshold`,
+        tradeId,
+        impactBps,
+        maxPriceImpactBps,
+      );
+    }
   }
 
   /**
@@ -296,6 +399,7 @@ export class SpotSwapService {
     slippageBps: number,
     chunks: number,
     intervalSeconds: number,
+    maxPriceImpactBps: number | undefined,
     log: Logger,
   ): Promise<BuyResult> {
     if (chunks <= 1) {
@@ -305,6 +409,7 @@ export class SpotSwapService {
         buyToken,
         totalSellAmountAtoms.toString(),
         slippageBps,
+        maxPriceImpactBps,
         log,
       );
       return {
@@ -342,6 +447,7 @@ export class SpotSwapService {
           buyToken,
           chunkAmounts[i]!.toString(),
           slippageBps,
+          maxPriceImpactBps,
           chunkLog,
         );
         completed.push(result);

@@ -16,6 +16,11 @@ export interface BuyRequest {
   readonly twapChunks?: number;
   /** Delay between chunks. Only meaningful when twapChunks > 1. */
   readonly twapIntervalSeconds?: number;
+  /**
+   * Refuse this trade (or TWAP chunk of it) if its price impact vs a small
+   * reference quote exceeds this many basis points. Omitted disables the check.
+   */
+  readonly maxPriceImpactBps?: number;
 }
 
 /**

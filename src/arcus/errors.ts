@@ -114,3 +114,23 @@ export class ArcusTwapPartialFillError extends ArcusError {
     this.totalChunks = totalChunks;
   }
 }
+
+/**
+ * A buy's price — vs a small reference quote for the same pair — moves the
+ * market more than the configured threshold allows. Nothing was signed.
+ */
+export class ArcusPriceImpactError extends ArcusError {
+  readonly priceImpactBps: number;
+  readonly maxPriceImpactBps: number;
+
+  constructor(
+    message: string,
+    tradeId: string,
+    priceImpactBps: number,
+    maxPriceImpactBps: number,
+  ) {
+    super(message, tradeId);
+    this.priceImpactBps = priceImpactBps;
+    this.maxPriceImpactBps = maxPriceImpactBps;
+  }
+}

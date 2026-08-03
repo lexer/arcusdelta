@@ -6,10 +6,12 @@ import type {
 } from '@arcus-xyz/arcus-spot-sdk';
 import {pino} from 'pino';
 import type {WalletProvider} from '../chain/walletProvider.js';
+import {PriceNotFoundError} from '../prices/priceFeed.js';
 import {
   ArcusExecutionFailedError,
   ArcusPermitError,
   ArcusPollTimeoutError,
+  ArcusPriceFeedError,
   ArcusPriceImpactError,
   ArcusQuoteError,
   ArcusSubmissionError,
@@ -110,6 +112,7 @@ interface Harness {
   };
   sleep: ReturnType<typeof vi.fn>;
   publicClient: PublicClientMock;
+  priceFeed: {getPrice: ReturnType<typeof vi.fn>};
 }
 
 function harness(
@@ -135,6 +138,13 @@ function harness(
     getStatus,
   };
   const sleep = vi.fn().mockResolvedValue(undefined);
+  // 200 USDG per NVDA — matches the default quote fixture exactly, so tests
+  // that don't care about price impact see zero impact by default.
+  const priceFeed = {
+    getPrice: vi
+      .fn()
+      .mockResolvedValue({bid: 200, ask: 200, isTradingHalt: false}),
+  };
 
   const service = new SpotSwapService({
     router: router as SpotRouter,
@@ -146,10 +156,11 @@ function harness(
     logger: pino({level: 'silent'}),
     chainId: 4663,
     sellSymbol: 'USDG',
+    priceFeed,
     sleep,
   });
 
-  return {service, router, sleep, publicClient};
+  return {service, router, sleep, publicClient, priceFeed};
 }
 
 const request = {
@@ -300,12 +311,11 @@ describe('executeSell', () => {
   });
 
   it('never checks price impact — SellRequest has no threshold to check against', async () => {
-    const {service, router} = sellHarness();
+    const {service, priceFeed} = sellHarness();
 
     await service.executeSell(sellRequest);
 
-    // One quote for the trade itself; no second reference quote requested.
-    expect(router.getQuote).toHaveBeenCalledOnce();
+    expect(priceFeed.getPrice).not.toHaveBeenCalled();
   });
 });
 
@@ -687,24 +697,26 @@ describe('TWAP chunking', () => {
 });
 
 describe('price impact gate', () => {
-  // 1% of SELL_ATOMS ('100000000'), matching SpotSwapService's own
-  // reference-amount calculation.
-  const REFERENCE_ATOMS = '1000000';
-
   /** buyAmount atoms such that the resulting quote prices at `price` USDG per NVDA. */
   function buyAtomsForPrice(sellAtoms: string, price: number): string {
     return BigInt(Math.round((Number(sellAtoms) * 1e12) / price)).toString();
   }
 
-  /** Prices the reference-sized quote at `referencePrice`, everything else at `tradePrice`. */
-  function priceImpactRouter(
+  /**
+   * Prices every requested quote at `tradePrice` (USDG per NVDA) — an array
+   * prices the Nth call at the Nth entry, holding the last entry for any
+   * calls beyond it.
+   */
+  function priceRouter(
     router: Harness['router'],
-    referencePrice: number,
-    tradePrice: number,
+    tradePrice: number | readonly number[],
   ) {
+    let call = 0;
     router.getQuote.mockImplementation(req => {
-      const price =
-        req.sellAmount === REFERENCE_ATOMS ? referencePrice : tradePrice;
+      const price = Array.isArray(tradePrice)
+        ? tradePrice[Math.min(call, tradePrice.length - 1)]!
+        : (tradePrice as number);
+      call++;
       const buyAmount = buyAtomsForPrice(req.sellAmount, price);
       return Promise.resolve({
         recommended: 'arcus',
@@ -720,24 +732,21 @@ describe('price impact gate', () => {
   }
 
   it('executes normally when price impact is within the threshold', async () => {
-    const {service, router} = harness();
-    priceImpactRouter(router, 200, 200.1); // ~5 bps, under the 100 bps threshold
+    const {service, priceFeed} = harness();
+    // Default quote fixture and default price feed both price at 200 — 0 bps.
 
     const result = await service.executeBuy({
       ...request,
       maxPriceImpactBps: 100,
     });
 
-    expect(router.getQuote).toHaveBeenCalledTimes(2);
-    expect(router.getQuote).toHaveBeenCalledWith(
-      expect.objectContaining({sellAmount: REFERENCE_ATOMS}),
-    );
+    expect(priceFeed.getPrice).toHaveBeenCalledWith(4663, NVDA.address);
     expect(result.txHashes).toEqual([TX_HASH]);
   });
 
   it('refuses an un-chunked buy whose price impact exceeds the threshold', async () => {
     const {service, router} = harness();
-    priceImpactRouter(router, 200, 204); // 2% = 200 bps, over the 100 bps threshold
+    priceRouter(router, 204); // 2% above the reference (200) = 200 bps, over the 100 bps threshold
 
     const failure = await service
       .executeBuy({...request, maxPriceImpactBps: 100})
@@ -750,33 +759,38 @@ describe('price impact gate', () => {
     expect(signQuoteMock).not.toHaveBeenCalled();
   });
 
+  it('refuses when the reference exchange has halted trading', async () => {
+    const {service, priceFeed} = harness();
+    priceFeed.getPrice.mockResolvedValue({
+      bid: 200,
+      ask: 200,
+      isTradingHalt: true,
+    });
+
+    await expect(
+      service.executeBuy({...request, maxPriceImpactBps: 100}),
+    ).rejects.toThrow(ArcusPriceFeedError);
+    expect(signQuoteMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the reference price cannot be found', async () => {
+    const {service, priceFeed} = harness();
+    priceFeed.getPrice.mockRejectedValue(
+      new PriceNotFoundError(4663, NVDA.address),
+    );
+
+    await expect(
+      service.executeBuy({...request, maxPriceImpactBps: 100}),
+    ).rejects.toThrow(ArcusPriceFeedError);
+    expect(signQuoteMock).not.toHaveBeenCalled();
+  });
+
   it('checks impact before every TWAP chunk, wrapping a mid-sequence breach in the existing partial-fill error', async () => {
-    const {service, router, sleep} = harness(
+    const {service, router, priceFeed, sleep} = harness(
       ['confirmed', 'confirmed'],
       makePublicClient(),
     );
-    // Chunks 1 and 2 trade at the reference price (no impact); chunk 3 does not.
-    let tradeCalls = 0;
-    router.getQuote.mockImplementation(req => {
-      let price: number;
-      if (req.sellAmount === '333333') {
-        price = 200; // every chunk's reference call
-      } else {
-        tradeCalls++;
-        price = tradeCalls <= 2 ? 200 : 400; // chunk 3 is 100% worse
-      }
-      const buyAmount = buyAtomsForPrice(req.sellAmount, price);
-      return Promise.resolve({
-        recommended: 'arcus',
-        all: [
-          makeQuote({
-            sellAmount: req.sellAmount,
-            buyAmount,
-            arcus: {minAmountOut: buyAmount},
-          }),
-        ],
-      });
-    });
+    priceRouter(router, [200, 200, 400]); // chunks 1-2 at the reference; chunk 3 is 100% worse
     router.submitSignedQuote
       .mockResolvedValueOnce({
         venue: 'arcus',
@@ -807,6 +821,7 @@ describe('price impact gate', () => {
     expect(error.completedChunks).toHaveLength(2);
     // Chunk 3's submission is never reached — the breach is caught first.
     expect(router.submitSignedQuote).toHaveBeenCalledTimes(2);
+    expect(priceFeed.getPrice).toHaveBeenCalledTimes(3);
     expect(sleep).toHaveBeenCalledTimes(2);
   });
 });

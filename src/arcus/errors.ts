@@ -116,8 +116,8 @@ export class ArcusTwapPartialFillError extends ArcusError {
 }
 
 /**
- * A buy's price — vs a small reference quote for the same pair — moves the
- * market more than the configured threshold allows. Nothing was signed.
+ * A buy's price — vs the Robinhood price feed's reference — moves the market
+ * more than the configured threshold allows. Nothing was signed.
  */
 export class ArcusPriceImpactError extends ArcusError {
   readonly priceImpactBps: number;
@@ -134,3 +134,10 @@ export class ArcusPriceImpactError extends ArcusError {
     this.maxPriceImpactBps = maxPriceImpactBps;
   }
 }
+
+/**
+ * The price impact gate could not get a reliable reference price — the feed
+ * lookup failed, the asset isn't listed, or it's halted. "Cannot verify"
+ * fails closed, same as an actual breach: nothing is signed.
+ */
+export class ArcusPriceFeedError extends ArcusError {}

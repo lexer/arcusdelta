@@ -17,6 +17,7 @@ import type {SymbolConfig} from '../config/symbols.js';
 import {createLogger} from '../logging/logger.js';
 import type {Logger} from '../logging/logger.js';
 import {PnlReporter} from '../pnl/pnlReporter.js';
+import {createRobinhoodPriceFeed} from '../prices/robinhoodPriceFeed.js';
 import {DepositService} from '../uniswap/depositService.js';
 import {createFeeReader} from '../uniswap/feeReader.js';
 import {resolvePoolIdentity} from '../uniswap/poolAddress.js';
@@ -54,6 +55,7 @@ export function createContainer(config: Config): Container {
   const wallet = createWalletProvider(config.seed, chain, config.rpcUrl);
   const router = new SpotRouterClient({baseUrl: config.arcusRouterUrl});
   const tokens = new TokenResolver(router, config.chainId);
+  const priceFeed = createRobinhoodPriceFeed();
 
   const swapService = new SpotSwapService({
     router,
@@ -62,6 +64,7 @@ export function createContainer(config: Config): Container {
     logger,
     chainId: config.chainId,
     sellSymbol: SELL_SYMBOL,
+    priceFeed,
   });
 
   /** Resolves USDG/stock token metadata and the live v3 pool for one symbol. */

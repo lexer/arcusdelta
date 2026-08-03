@@ -26,6 +26,7 @@ import type {Logger} from '../logging/logger.js';
 import {
   ArcusExecutionFailedError,
   ArcusPollTimeoutError,
+  ArcusPriceFeedError,
   ArcusPriceImpactError,
   ArcusQuoteError,
   ArcusSubmissionError,
@@ -41,6 +42,7 @@ import type {
   QuotePreview,
   SellRequest,
 } from './types.js';
+import type {PriceFeed, TokenPrice} from '../prices/priceFeed.js';
 
 const POLL_INTERVAL_MS = 2_000;
 const MAX_POLL_ATTEMPTS = 30;
@@ -74,15 +76,6 @@ function splitIntoChunks(total: bigint, chunks: number): bigint[] {
 /** Sums atomic-unit decimal strings without going through floating point. */
 function sumAtoms(amounts: readonly string[]): string {
   return amounts.reduce((sum, amount) => sum + BigInt(amount), 0n).toString();
-}
-
-/**
- * 1% of the trade, floored at 1 atom — small enough to approximate the price
- * a trade of negligible size would get, used as the price impact baseline.
- */
-function referenceSellAmount(totalAtoms: bigint): bigint {
-  const reference = totalAtoms / 100n;
-  return reference > 0n ? reference : 1n;
 }
 
 /**
@@ -129,6 +122,8 @@ export interface SpotSwapServiceOptions {
   readonly chainId: number;
   /** Symbol of the token spent on every buy. */
   readonly sellSymbol: string;
+  /** The true-market reference the price impact gate compares a buy against. */
+  readonly priceFeed: PriceFeed;
   readonly sleep?: Sleep;
 }
 
@@ -139,6 +134,7 @@ export class SpotSwapService {
   private readonly logger: Logger;
   private readonly chainId: number;
   private readonly sellSymbol: string;
+  private readonly priceFeed: PriceFeed;
   private readonly sleep: Sleep;
 
   constructor(options: SpotSwapServiceOptions) {
@@ -148,6 +144,7 @@ export class SpotSwapService {
     this.logger = options.logger;
     this.chainId = options.chainId;
     this.sellSymbol = options.sellSymbol;
+    this.priceFeed = options.priceFeed;
     this.sleep = options.sleep ?? defaultSleep;
   }
 
@@ -307,8 +304,6 @@ export class SpotSwapService {
         tradeId,
         sellToken,
         buyToken,
-        sellAmountAtoms,
-        slippageBps,
         quote,
         maxPriceImpactBps,
         log,
@@ -325,42 +320,51 @@ export class SpotSwapService {
   }
 
   /**
-   * Refuses a trade whose price — vs a small reference quote for the same
-   * pair, requested fresh alongside it — has moved more than the configured
-   * threshold. The reference is 1% of this trade's size (see
-   * {@link referenceSellAmount}), not the Uniswap pool price, so this works
-   * even if Arcus routes the two sizes through different venues.
+   * Refuses a trade whose price has moved more than the configured threshold
+   * versus the Robinhood price feed's reference for the same asset — a true
+   * exchange price, not derived from Arcus or any DEX, so this stays correct
+   * regardless of how Arcus itself routes the trade. USDG is treated 1:1
+   * with USD, same as everywhere else in this codebase.
    */
   private async checkPriceImpact(
     tradeId: string,
     sellToken: TokenInfo,
     buyToken: TokenInfo,
-    sellAmountAtoms: string,
-    slippageBps: number,
     quote: ArcusFirmQuote,
     maxPriceImpactBps: number,
     log: Logger,
   ): Promise<void> {
-    const referenceAtoms = referenceSellAmount(BigInt(sellAmountAtoms));
-    const referenceQuote = await this.fetchQuote(
-      tradeId,
-      sellToken,
-      buyToken,
-      referenceAtoms.toString(),
-      slippageBps,
-      log,
-    );
+    let reference: TokenPrice;
+    try {
+      reference = await this.priceFeed.getPrice(this.chainId, buyToken.address);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.error({error: message}, 'price feed lookup failed');
+      throw new ArcusPriceFeedError(
+        `Could not verify price impact for ${buyToken.symbol}: ${message}`,
+        tradeId,
+      );
+    }
+
+    if (reference.isTradingHalt) {
+      log.error(
+        {symbol: buyToken.symbol},
+        'reference exchange has halted trading',
+      );
+      throw new ArcusPriceFeedError(
+        `${buyToken.symbol} is halted on the reference exchange; refusing to buy without a reliable price`,
+        tradeId,
+      );
+    }
 
     const tradePrice = effectivePrice(
       quote,
       sellToken.decimals,
       buyToken.decimals,
     );
-    const referencePrice = effectivePrice(
-      referenceQuote,
-      sellToken.decimals,
-      buyToken.decimals,
-    );
+    // The ask is the side a buyer actually crosses, so a trade with no
+    // size-driven impact reads as ~0 bps, not half the bid/ask spread.
+    const referencePrice = reference.ask;
     const impactBps = ((tradePrice - referencePrice) / referencePrice) * 10_000;
 
     log.info(
@@ -374,7 +378,7 @@ export class SpotSwapService {
         'price impact exceeds threshold',
       );
       throw new ArcusPriceImpactError(
-        `Price impact ${impactBps.toFixed(2)} bps exceeds the ${maxPriceImpactBps} bps threshold`,
+        `Price impact ${impactBps.toFixed(2)} bps exceeds the ${maxPriceImpactBps} bps threshold (Arcus ${tradePrice.toFixed(4)} vs Robinhood ask ${referencePrice.toFixed(4)})`,
         tradeId,
         impactBps,
         maxPriceImpactBps,

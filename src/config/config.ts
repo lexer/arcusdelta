@@ -61,6 +61,9 @@ export interface Config extends MarketDataConfig {
   readonly twapChunks: number;
   readonly twapIntervalSeconds: number;
   readonly maxPriceImpactBps: number;
+  readonly minCloseProfitBps: number;
+  readonly maxDeltaBps: number;
+  readonly pairCheckIntervalSeconds: number;
 }
 
 export type EnvSource = Record<string, string | undefined>;
@@ -126,6 +129,9 @@ export function loadConfig(source: EnvSource = readDotenv()): Config {
     twapChunks: env.TWAP_CHUNKS,
     twapIntervalSeconds: env.TWAP_INTERVAL_SECONDS,
     maxPriceImpactBps: env.MAX_PRICE_IMPACT_BPS,
+    minCloseProfitBps: env.MIN_CLOSE_PROFIT_BPS,
+    maxDeltaBps: env.MAX_DELTA_BPS,
+    pairCheckIntervalSeconds: env.PAIR_CHECK_INTERVAL_SECONDS,
   });
 }
 
@@ -159,5 +165,8 @@ export function loggableConfig(config: Config): Record<string, unknown> {
     twapChunks: config.twapChunks,
     twapIntervalSeconds: config.twapIntervalSeconds,
     maxPriceImpactBps: config.maxPriceImpactBps,
+    minCloseProfitBps: config.minCloseProfitBps,
+    maxDeltaBps: config.maxDeltaBps,
+    pairCheckIntervalSeconds: config.pairCheckIntervalSeconds,
   };
 }

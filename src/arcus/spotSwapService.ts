@@ -184,6 +184,47 @@ export class SpotSwapService {
     };
   }
 
+  /**
+   * Read-only preview of the *sell* direction: what an exact amount of a
+   * token would fetch in the quote currency right now.
+   *
+   * The mirror of {@link previewQuote}, and the exit valuation the pair
+   * monitor needs — proceeds from a real quote for the real size, so spread
+   * and price impact are already priced in rather than assumed away.
+   */
+  async previewSell(request: SellRequest): Promise<QuotePreview> {
+    const log = this.logger.child({tradeId: request.tradeId});
+    const sellToken = await this.tokens.byAddress(request.sellToken);
+    const buyToken = await this.tokens.bySymbol(this.sellSymbol);
+
+    const quote = await this.quoteAndValidate(
+      request.tradeId,
+      sellToken,
+      buyToken,
+      request.sellAmountAtoms.toString(),
+      request.slippageBps,
+      log,
+    );
+
+    const sellAmount = formatUnits(request.sellAmountAtoms, sellToken.decimals);
+    const buyAmount = formatUnits(BigInt(quote.buyAmount), buyToken.decimals);
+    return {
+      tradeId: request.tradeId,
+      venue: 'arcus',
+      sellSymbol: sellToken.symbol,
+      sellAmount,
+      buySymbol: buyToken.symbol,
+      buyAmount,
+      minBuyAmount: formatUnits(
+        BigInt(quote.arcus.minAmountOut),
+        buyToken.decimals,
+      ),
+      pricePerUnit: divideForDisplay(buyAmount, sellAmount),
+      expiresAt: new Date(quote.expiry * 1000).toISOString(),
+      fees: quote.fees,
+    };
+  }
+
   async executeBuy(request: BuyRequest): Promise<BuyResult> {
     const log = this.logger.child({tradeId: request.tradeId});
     const startedAt = Date.now();

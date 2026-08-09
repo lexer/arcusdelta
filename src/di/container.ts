@@ -33,6 +33,8 @@ const SELL_SYMBOL = 'USDG';
 
 export interface Container {
   readonly logger: Logger;
+  /** Token metadata from the Arcus router, shared and cached. */
+  readonly tokens: TokenResolver;
   /** Durable record of every fill and funding payment. */
   readonly journal: ExecutionJournal;
   readonly wallet: WalletProvider;
@@ -190,6 +192,7 @@ export function createContainer(config: Config): Container {
   return {
     logger,
     journal,
+    tokens,
     wallet,
     swapService,
     createDepositService,

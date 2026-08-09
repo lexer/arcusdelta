@@ -1,0 +1,263 @@
+import {describe, expect, it, vi} from 'vitest';
+import type {
+  ExecutionEvent,
+  ExecutionJournal,
+} from '../journal/executionJournal.js';
+import {createLogger} from '../logging/logger.js';
+import type {PerpPosition} from '../perps/types.js';
+import {PairMonitor, spotCostFromJournal} from './pairMonitor.js';
+import type {WatchedPair} from './pairMonitor.js';
+
+const logger = createLogger('silent');
+
+function memoryJournal(events: ExecutionEvent[] = []): ExecutionJournal {
+  return {record: () => {}, read: () => [...events]};
+}
+
+function spotBuy(symbol: string, usdg: string, base: string): ExecutionEvent {
+  return {
+    kind: 'spot-fill',
+    at: '2026-08-09T17:49:00.000Z',
+    tradeId: 't1',
+    symbol,
+    direction: 'buy',
+    sellSymbol: 'USDG',
+    buySymbol: symbol,
+    sellAmount: usdg,
+    buyAmount: base,
+    txHashes: ['0xabc'],
+  };
+}
+
+function spotSell(symbol: string, base: string, usdg: string): ExecutionEvent {
+  return {
+    kind: 'spot-fill',
+    at: '2026-08-09T18:49:00.000Z',
+    tradeId: 't1',
+    symbol,
+    direction: 'sell',
+    sellSymbol: symbol,
+    buySymbol: 'USDG',
+    sellAmount: base,
+    buyAmount: usdg,
+    txHashes: ['0xdef'],
+  };
+}
+
+function makePosition(overrides: Partial<PerpPosition> = {}): PerpPosition {
+  return {
+    address: '0xabc',
+    accountIndex: 0,
+    marketId: 28,
+    marketDisplayName: 'NVDA-USD',
+    side: 'SHORT',
+    size: '-0.053',
+    averageEntryPrice: '225.18',
+    cumulativeFunding: {sinceOpen: '0.000057278'},
+    leverage: '1',
+    marginMode: 'CROSS',
+    marginUsed: '0.6',
+    positionValueNotional: '-11.93',
+    unrealizedPnl: '0',
+    markPx: '225.18',
+    ...overrides,
+  };
+}
+
+function makePair(overrides: Partial<WatchedPair> = {}): WatchedPair {
+  return {
+    symbol: 'NVDA',
+    market: 'NVDA-USD',
+    readSpotBalance: async () => '0.052945920766603108',
+    quoteSpotExit: async () => '11.93',
+    quotePerpExit: async () => '225.18',
+    ...overrides,
+  };
+}
+
+function makeMonitor(
+  overrides: {
+    pairs?: WatchedPair[];
+    positions?: PerpPosition[];
+    journal?: ExecutionJournal;
+    minProfitBps?: number;
+    deltaToleranceBps?: number;
+  } = {},
+) {
+  return new PairMonitor({
+    pairs: overrides.pairs ?? [makePair()],
+    shorts: {
+      positions: vi
+        .fn()
+        .mockResolvedValue(overrides.positions ?? [makePosition()]),
+    },
+    marketData: {getBbo: vi.fn()},
+    journal:
+      overrides.journal ??
+      memoryJournal([spotBuy('NVDA', '11.93454', '0.0529')]),
+    logger,
+    minProfitBps: overrides.minProfitBps ?? 0,
+    deltaToleranceBps: overrides.deltaToleranceBps ?? 100,
+    checkIntervalSeconds: 30,
+    sleep: async () => {},
+  });
+}
+
+describe('spotCostFromJournal', () => {
+  it('sums the USDG spent on buys', () => {
+    const journal = memoryJournal([
+      spotBuy('NVDA', '11.93454', '0.0529'),
+      spotBuy('NVDA', '5', '0.022'),
+    ]);
+
+    expect(spotCostFromJournal(journal, 'NVDA')).toBe('16.93454');
+  });
+
+  it('nets out USDG returned by earlier sells', () => {
+    const journal = memoryJournal([
+      spotBuy('NVDA', '20', '0.09'),
+      spotSell('NVDA', '0.04', '9'),
+    ]);
+
+    expect(spotCostFromJournal(journal, 'NVDA')).toBe('11');
+  });
+
+  it('ignores other symbols', () => {
+    const journal = memoryJournal([
+      spotBuy('NVDA', '11', '0.05'),
+      spotBuy('AAPL', '99', '0.3'),
+    ]);
+
+    expect(spotCostFromJournal(journal, 'NVDA')).toBe('11');
+  });
+
+  it('is zero with no history', () => {
+    expect(spotCostFromJournal(memoryJournal(), 'NVDA')).toBe('0');
+  });
+});
+
+describe('PairMonitor.check', () => {
+  it('values a managed pair', async () => {
+    const {opportunities} = await makeMonitor().check();
+
+    expect(opportunities).toHaveLength(1);
+    expect(opportunities[0]!.symbol).toBe('NVDA');
+    expect(opportunities[0]!.quantity).toBe('0.053');
+  });
+
+  it('takes the perp entry price from the exchange, not the journal', async () => {
+    const {opportunities} = await makeMonitor({
+      positions: [makePosition({averageEntryPrice: '230'})],
+    }).check();
+
+    expect(opportunities[0]!.entryBasis).not.toBe('0');
+    // 230 entry vs a 225.18 exit is 4.82 per unit of profit on the short.
+    expect(opportunities[0]!.perpPnl).toBe('0.25546');
+  });
+
+  it('flags a pair once the basis has converged enough', async () => {
+    // Perp buy-back 1.18 cheaper than entry on 0.053 is +0.06254, less
+    // 0.00454 of spot exit cost plus funding: ~48.6 bps on 11.93 deployed.
+    const {opportunities} = await makeMonitor({
+      pairs: [makePair({quotePerpExit: async () => '224.00'})],
+      minProfitBps: 40,
+    }).check();
+
+    expect(Number(opportunities[0]!.netPnlBps)).toBeCloseTo(48.6, 1);
+    expect(opportunities[0]!.worthClosing).toBe(true);
+  });
+
+  it('holds a pair that has not converged', async () => {
+    const {opportunities} = await makeMonitor({minProfitBps: 50}).check();
+
+    expect(opportunities[0]!.worthClosing).toBe(false);
+  });
+
+  it('skips a long position outright', async () => {
+    const {opportunities, foreign} = await makeMonitor({
+      positions: [makePosition({side: 'LONG', size: '94.35'})],
+    }).check();
+
+    expect(opportunities).toHaveLength(0);
+    expect(foreign).toEqual(['NVDA-USD']);
+  });
+
+  it("skips a short with no matching spot balance — the operator's own", async () => {
+    const {opportunities, foreign} = await makeMonitor({
+      pairs: [makePair({readSpotBalance: async () => '0.0072'})],
+      positions: [makePosition({size: '-265.26'})],
+    }).check();
+
+    expect(opportunities).toHaveLength(0);
+    expect(foreign).toEqual(['NVDA-USD']);
+  });
+
+  it('ignores a watched symbol with no open position', async () => {
+    const {opportunities} = await makeMonitor({positions: []}).check();
+
+    expect(opportunities).toHaveLength(0);
+  });
+
+  it('counts funding accrued since the pair opened', async () => {
+    const {opportunities} = await makeMonitor({
+      positions: [makePosition({cumulativeFunding: {sinceOpen: '0.5'}})],
+    }).check();
+
+    expect(opportunities[0]!.fundingEarned).toBe('0.5');
+  });
+
+  it('falls back to all-time funding when sinceOpen is absent', async () => {
+    const {opportunities} = await makeMonitor({
+      positions: [makePosition({cumulativeFunding: {allTime: '0.25'}})],
+    }).check();
+
+    expect(opportunities[0]!.fundingEarned).toBe('0.25');
+  });
+
+  it('charges the real exit quote rather than the mark', async () => {
+    const generous = await makeMonitor({
+      pairs: [makePair({quoteSpotExit: async () => '12.20'})],
+    }).check();
+    const realistic = await makeMonitor({
+      pairs: [makePair({quoteSpotExit: async () => '11.80'})],
+    }).check();
+
+    expect(Number(generous.opportunities[0]!.netPnl)).toBeGreaterThan(
+      Number(realistic.opportunities[0]!.netPnl),
+    );
+  });
+});
+
+describe('PairMonitor.run', () => {
+  it('prints a table each pass and stops after maxPasses', async () => {
+    const lines: string[] = [];
+    await makeMonitor().run({maxPasses: 2, print: l => void lines.push(l)});
+
+    const output = lines.join('\n');
+    expect(output).toContain('pass 1');
+    expect(output).toContain('pass 2');
+    expect(output).toContain('NVDA');
+  });
+
+  it('says so when nothing is open', async () => {
+    const lines: string[] = [];
+    await makeMonitor({positions: []}).run({
+      maxPasses: 1,
+      print: l => void lines.push(l),
+    });
+
+    expect(lines.join('\n')).toContain('no managed pairs open');
+  });
+
+  it('calls out a pair above the threshold without closing it', async () => {
+    const lines: string[] = [];
+    await makeMonitor({
+      pairs: [makePair({quotePerpExit: async () => '224.00'})],
+      minProfitBps: 10,
+    }).run({maxPasses: 1, print: l => void lines.push(l)});
+
+    const output = lines.join('\n');
+    expect(output).toContain('above threshold');
+    expect(output).toContain('npm run close');
+  });
+});

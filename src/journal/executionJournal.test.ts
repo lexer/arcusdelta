@@ -6,6 +6,7 @@ import {
   createFileJournal,
   createNullJournal,
   latestFundingTimeByMarket,
+  spotFillEvent,
   totalFunding,
   type ExecutionEvent,
   type FundingEvent,
@@ -107,6 +108,44 @@ describe('createFileJournal', () => {
     const events = journal.read() as PerpFillEvent[];
     expect(events).toHaveLength(1);
     expect(events[0]!.orderId).toBe('good');
+  });
+});
+
+describe('spotFillEvent', () => {
+  it('converts router atoms to human decimals on both sides', () => {
+    const event = spotFillEvent({
+      tradeId: 't1',
+      symbol: 'NVDA',
+      direction: 'buy',
+      sellSymbol: 'USDG',
+      buySymbol: 'NVDA',
+      // The real rehearsal values: 11.93454 USDG in, 0.0529459… NVDA out.
+      sellAmountAtoms: '11934540',
+      sellDecimals: 6,
+      buyAmountAtoms: '52945920766603108',
+      buyDecimals: 18,
+      txHashes: ['0xabc'],
+    });
+
+    expect(event.sellAmount).toBe('11.93454');
+    expect(event.buyAmount).toBe('0.052945920766603108');
+  });
+
+  it('does not leave a six-decimal amount looking like millions', () => {
+    const event = spotFillEvent({
+      tradeId: 't1',
+      symbol: 'NVDA',
+      direction: 'buy',
+      sellSymbol: 'USDG',
+      buySymbol: 'NVDA',
+      sellAmountAtoms: '11934540',
+      sellDecimals: 6,
+      buyAmountAtoms: '1',
+      buyDecimals: 18,
+      txHashes: [],
+    });
+
+    expect(Number(event.sellAmount)).toBeLessThan(100);
   });
 });
 

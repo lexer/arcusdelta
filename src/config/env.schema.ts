@@ -123,6 +123,21 @@ export const envSchema = marketDataEnvSchema.extend({
    * reference quote for the same pair — exceeds this many basis points.
    */
   MAX_PRICE_IMPACT_BPS: z.coerce.number().int().min(0).max(10_000).default(100),
+
+  /**
+   * Realizable PnL, in basis points of the capital deployed, at which the
+   * pair monitor flags a position as worth closing. May be negative, which
+   * expresses a stop rather than a target.
+   */
+  MIN_CLOSE_PROFIT_BPS: z.coerce
+    .number()
+    .int()
+    .min(-10_000)
+    .max(10_000)
+    .default(25),
+  /** How far spot and perp sizes may drift before a pair is disowned. */
+  MAX_DELTA_BPS: z.coerce.number().int().min(0).max(10_000).default(100),
+  PAIR_CHECK_INTERVAL_SECONDS: z.coerce.number().int().positive().default(60),
 });
 
 export type MarketDataEnv = z.infer<typeof marketDataEnvSchema>;

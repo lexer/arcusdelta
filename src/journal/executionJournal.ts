@@ -21,6 +21,7 @@
 
 import {appendFileSync, mkdirSync, readFileSync} from 'node:fs';
 import {dirname} from 'node:path';
+import {formatUnits} from 'viem';
 
 /** A perp order that filled, in whole or in part. */
 export interface PerpFillEvent {
@@ -55,7 +56,12 @@ export interface SpotFillEvent {
   readonly direction: 'buy' | 'sell';
   readonly sellSymbol: string;
   readonly buySymbol: string;
-  /** Atomic units, as the router reports them. */
+  /**
+   * **Human decimal units, not atoms.** The router reports atoms, but a
+   * ledger meant to be read by eye — and summed against USDG balances —
+   * cannot mix scales. Build these with {@link spotFillEvent} rather than
+   * copying router fields straight in.
+   */
   readonly sellAmount: string;
   readonly buyAmount: string;
   readonly txHashes: readonly string[];
@@ -80,6 +86,41 @@ export interface FundingEvent {
 }
 
 export type ExecutionEvent = PerpFillEvent | SpotFillEvent | FundingEvent;
+
+/**
+ * Builds a {@link SpotFillEvent} from what the router actually returns.
+ *
+ * The router speaks atoms and the journal speaks decimals; doing the
+ * conversion here, once, is what stops a caller from writing 11934540 where
+ * 11.93454 belongs — a mistake that reads as plausible until something sums
+ * it against a balance.
+ */
+export function spotFillEvent(input: {
+  readonly tradeId: string;
+  readonly symbol: string;
+  readonly direction: 'buy' | 'sell';
+  readonly sellSymbol: string;
+  readonly buySymbol: string;
+  readonly sellAmountAtoms: string;
+  readonly sellDecimals: number;
+  readonly buyAmountAtoms: string;
+  readonly buyDecimals: number;
+  readonly txHashes: readonly string[];
+  readonly at?: string;
+}): SpotFillEvent {
+  return {
+    kind: 'spot-fill',
+    at: input.at ?? new Date().toISOString(),
+    tradeId: input.tradeId,
+    symbol: input.symbol,
+    direction: input.direction,
+    sellSymbol: input.sellSymbol,
+    buySymbol: input.buySymbol,
+    sellAmount: formatUnits(BigInt(input.sellAmountAtoms), input.sellDecimals),
+    buyAmount: formatUnits(BigInt(input.buyAmountAtoms), input.buyDecimals),
+    txHashes: input.txHashes,
+  };
+}
 
 export interface ExecutionJournal {
   record(event: ExecutionEvent): void;

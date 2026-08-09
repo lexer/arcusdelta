@@ -1,106 +1,14 @@
 /**
- * Market metadata and the decimal <-> engine-integer conversions the order
- * path depends on.
+ * Market metadata, and the one place a human price/size pair is validated
+ * against a market's grid and turned into the integers the engine signs.
  *
- * The Arcus matching engine takes prices in **ticks** (`price / tickSize`) and
- * sizes in **quantums** (`size / stepSize`), both exact integers, and those
- * same integers go into the signed order payload. A rounding error here is not
- * a rejected order — it is a *validly signed order for the wrong amount*, so
- * every conversion runs in `bigint` on scaled decimal strings and throws
- * rather than rounding.
+ * The arithmetic itself lives in `decimal.ts`; what is here is the market's
+ * rules — tick and step alignment, size bounds, and the minimum notional.
  */
 
-import {formatUnits, parseUnits} from 'viem';
-import {
-  PerpMarketNotFoundError,
-  PerpsAlignmentError,
-  PerpsOrderSizeError,
-} from './errors.js';
+import {compareDecimals, multiplyDecimals, toIncrements} from './decimal.js';
+import {PerpMarketNotFoundError, PerpsOrderSizeError} from './errors.js';
 import type {MarketSpec, PerpMarket} from './types.js';
-
-/**
- * Fixed-point scale for every conversion below. Comfortably above the
- * exchange's finest increment (BTC's `stepSize` is 1e-8) and matches the
- * 18-decimal convention the rest of the codebase already uses for atoms.
- */
-const SCALE = 18;
-
-/** Decimal string -> scaled bigint. Throws on anything `parseUnits` rejects. */
-function scale(value: string): bigint {
-  return parseUnits(value, SCALE);
-}
-
-/** Scaled bigint -> decimal string, trailing zeros trimmed. */
-function unscale(value: bigint): string {
-  return formatUnits(value, SCALE);
-}
-
-/**
- * Exact integer count of `increment` in `value`.
- *
- * Throws {@link PerpsAlignmentError} when `value` is not a whole multiple —
- * the engine would reject it with `Tick`, and silently rounding here would
- * change the size or price the operator asked for.
- */
-export function toIncrements(value: string, increment: string): bigint {
-  const scaledIncrement = scale(increment);
-  if (scaledIncrement <= 0n) {
-    throw new PerpsAlignmentError(
-      `Increment must be positive, got ${increment}`,
-      value,
-      increment,
-    );
-  }
-
-  const scaledValue = scale(value);
-  if (scaledValue % scaledIncrement !== 0n) {
-    throw new PerpsAlignmentError(
-      `${value} is not a whole multiple of ${increment}`,
-      value,
-      increment,
-    );
-  }
-  return scaledValue / scaledIncrement;
-}
-
-/** Largest multiple of `increment` at or below `value`. Never negative. */
-export function floorToIncrement(value: string, increment: string): string {
-  const scaledIncrement = scale(increment);
-  if (scaledIncrement <= 0n) {
-    throw new PerpsAlignmentError(
-      `Increment must be positive, got ${increment}`,
-      value,
-      increment,
-    );
-  }
-
-  const scaledValue = scale(value);
-  // bigint division truncates toward zero, which is the wrong direction for a
-  // negative value — a residual delta can legitimately be negative.
-  let steps = scaledValue / scaledIncrement;
-  if (scaledValue % scaledIncrement !== 0n && scaledValue < 0n) steps -= 1n;
-  return unscale(steps * scaledIncrement);
-}
-
-/** Product of two decimal strings, exact, as a decimal string. */
-export function multiplyDecimals(a: string, b: string): string {
-  return unscale((scale(a) * scale(b)) / 10n ** BigInt(SCALE));
-}
-
-/** `a / b` as a decimal string, truncated to {@link SCALE} places. */
-export function divideDecimals(a: string, b: string): string {
-  const divisor = scale(b);
-  if (divisor === 0n) throw new RangeError('Division by zero');
-  return unscale((scale(a) * 10n ** BigInt(SCALE)) / divisor);
-}
-
-/** Signed comparison of two decimal strings. */
-export function compareDecimals(a: string, b: string): number {
-  const left = scale(a);
-  const right = scale(b);
-  if (left < right) return -1;
-  return left > right ? 1 : 0;
-}
 
 /**
  * A price/size pair in both the human form the HTTP body carries and the

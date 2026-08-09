@@ -74,6 +74,34 @@ export class PerpMarketNotFoundError extends PerpsError {}
  */
 export class PerpsOrderSizeError extends PerpsError {}
 
+/**
+ * The market already holds a position this bot did not open.
+ *
+ * Perp positions net per market and carry no id, so trading into someone
+ * else's position makes the two indistinguishable forever after. Refusing is
+ * the only safe answer.
+ */
+export class PerpsPositionConflictError extends PerpsError {
+  readonly market: string;
+  readonly existingSide: string;
+  readonly existingSize: string;
+
+  constructor(
+    message: string,
+    market: string,
+    existingSide: string,
+    existingSize: string,
+  ) {
+    super(message);
+    this.market = market;
+    this.existingSide = existingSide;
+    this.existingSize = existingSize;
+  }
+}
+
+/** Free collateral does not cover the initial margin an order would reserve. */
+export class PerpsMarginError extends PerpsError {}
+
 /** The gateway rejected an order. Nothing rested and nothing filled. */
 export class PerpsOrderRejectedError extends PerpsError {
   readonly reason: string;

@@ -2,7 +2,7 @@
   "name": "arcusamm",
   "version": "0.1.0",
   "private": true,
-  "description": "Automated market-making bot for tokenized stocks on Arcus Spot and Robinhood Chain",
+  "description": "Delta-neutral basis bot: long tokenized stocks on Arcus Spot, short the matching Arcus perp, collect funding",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -13,13 +13,7 @@
     "funding": "tsx src/cli/funding.ts",
     "watch": "tsx src/cli/watch.ts",
     "apikey": "tsx src/cli/apikey.ts",
-    "cycle": "tsx src/cli/cycle.ts",
     "quote": "tsx src/cli/quote.ts",
-    "deposit": "tsx src/cli/deposit.ts",
-    "position": "tsx src/cli/position.ts",
-    "monitor": "tsx src/cli/monitor.ts",
-    "exit": "tsx src/cli/exit.ts",
-    "pnl": "tsx src/cli/pnl.ts",
     "lint": "gts lint",
     "fix": "gts fix",
     "typecheck": "tsc --noEmit",
@@ -35,8 +29,6 @@
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
-    "@uniswap/sdk-core": "^7.19.0",
-    "@uniswap/v3-sdk": "^3.31.1",
     "gts": "^6.0.2",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",

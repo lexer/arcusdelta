@@ -93,23 +93,6 @@ export const envSchema = marketDataEnvSchema.extend({
   USDG_BUY_AMOUNT: usdgAmount.optional(),
   SLIPPAGE_BPS: z.coerce.number().int().min(0).max(10_000).default(1),
 
-  // Uniswap v3 liquidity position.
-  RANGE_DEVIATION_PERCENT: z.coerce
-    .number()
-    .positive('must be greater than zero')
-    .max(100, 'must be at most 100')
-    .default(3),
-  /** Fee units (hundredths of a bip). 3000 = 0.3%. tickSpacing is derived from this via the factory, not configured separately. */
-  POOL_FEE: z.coerce.number().int().min(0).max(1_000_000).default(3_000),
-  LP_SLIPPAGE_BPS: z.coerce.number().int().min(0).max(10_000).default(50),
-  MINT_DEADLINE_SECONDS: z.coerce.number().int().positive().default(300),
-
-  // Position monitoring.
-  POOL_CHECK_INTERVAL_SECONDS: z.coerce.number().int().positive().default(30),
-  /** Consecutive out-of-range polls required before closing. */
-  EXIT_CONFIRMATIONS: z.coerce.number().int().positive().default(3),
-  CLOSE_SLIPPAGE_BPS: z.coerce.number().int().min(0).max(10_000).default(100),
-
   /**
    * Arcus trade execution. 1 chunk (the default) disables TWAP: a buy or
    * sell executes exactly as one quote-sign-submit-poll cycle, same as

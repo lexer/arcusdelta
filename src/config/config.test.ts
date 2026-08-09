@@ -21,21 +21,20 @@ describe('loadConfig', () => {
     expect(config.slippageBps).toBe(1);
   });
 
-  it('applies liquidity position defaults', () => {
+  it('applies pair monitoring defaults', () => {
     const config = loadConfig(validEnv());
 
-    expect(config.rangeDeviationPercent).toBe(3);
-    expect(config.poolFee).toBe(3000);
-    expect(config.lpSlippageBps).toBe(50);
-    expect(config.mintDeadlineSeconds).toBe(300);
+    expect(config.minCloseProfitBps).toBe(25);
+    expect(config.maxDeltaBps).toBe(100);
+    expect(config.pairCheckIntervalSeconds).toBe(60);
   });
 
-  it('applies monitoring defaults', () => {
+  it('applies perps defaults', () => {
     const config = loadConfig(validEnv());
 
-    expect(config.poolCheckIntervalSeconds).toBe(30);
-    expect(config.exitConfirmations).toBe(3);
-    expect(config.closeSlippageBps).toBe(100);
+    expect(config.arcusApiUrl).toBe('https://api.arcus.xyz');
+    expect(config.arcusAccountIndex).toBe(0);
+    expect(config.arcusApiPrivateKey).toBeUndefined();
   });
 
   it('applies TWAP defaults, disabled by default', () => {
@@ -61,16 +60,16 @@ describe('loadConfig', () => {
     );
   });
 
-  it('rejects a zero exit confirmation count', () => {
-    expect(() => loadConfig(validEnv({EXIT_CONFIRMATIONS: '0'}))).toThrow(
-      ConfigError,
-    );
+  it('rejects a zero pair check interval', () => {
+    expect(() =>
+      loadConfig(validEnv({PAIR_CHECK_INTERVAL_SECONDS: '0'})),
+    ).toThrow(ConfigError);
   });
 
-  it('rejects a non-positive range deviation', () => {
-    expect(() => loadConfig(validEnv({RANGE_DEVIATION_PERCENT: '0'}))).toThrow(
-      ConfigError,
-    );
+  it('rejects a malformed Arcus API private key', () => {
+    expect(() =>
+      loadConfig(validEnv({ARCUS_API_PRIVATE_KEY: 'not-a-key'})),
+    ).toThrow(ConfigError);
   });
 
   it('reads overrides from the environment', () => {

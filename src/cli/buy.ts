@@ -1,11 +1,13 @@
 /**
- * Entrypoint for `npm run buy` — buy every configured stock token on Arcus,
- * then deposit each into its Uniswap v3 pool.
+ * Entrypoint for `npm run buy` — buy the spot leg of every configured symbol
+ * on Arcus.
  *
- * Defaults to every symbol in `symbols.json`; `--symbol` narrows to one. The
- * two steps are confirmed separately because deposit amounts cannot be known
- * until the buys settle. `--yes` skips both prompts; `--no-deposit` stops
- * after the buys.
+ * The spot half on its own, with no hedge: useful for acquiring inventory
+ * deliberately, but it is **not** the delta-neutral strategy. Pairing a buy
+ * with the matching perp short is what `npm run open` will do.
+ *
+ * Defaults to every symbol in `symbols.json`; `--symbol` narrows to one.
+ * `--yes` skips the confirmation.
  */
 
 import {randomUUID} from 'node:crypto';
@@ -14,25 +16,17 @@ import {ArcusError} from '../arcus/errors.js';
 import {loadConfig, loggableConfig} from '../config/config.js';
 import {createContainer, SELL_SYMBOL} from '../di/container.js';
 import {runBuyCommand, type BuyRequestItem} from './buyCommand.js';
-import {runDepositCommand, type DepositRequestItem} from './depositCommand.js';
 import {alwaysYes, print, promptYes} from './prompt.js';
 import {loadSelectedSymbols} from './symbolSelection.js';
 
 async function main(): Promise<number> {
   const program = new Command()
     .name('buy')
-    .description(
-      'Buy configured stock tokens on Arcus and deposit them into their Uniswap v3 pools',
-    )
+    .description('Buy the spot leg of configured symbols on Arcus (unhedged)')
     .option('-y, --yes', 'skip the interactive confirmations')
-    .option('--no-deposit', 'stop after the buys, without opening any position')
     .option('--symbol <ticker>', 'act on only this configured symbol')
     .parse(process.argv);
-  const options = program.opts<{
-    yes?: boolean;
-    deposit: boolean;
-    symbol?: string;
-  }>();
+  const options = program.opts<{yes?: boolean; symbol?: string}>();
 
   const config = loadConfig();
   const symbols = loadSelectedSymbols(config, options.symbol);
@@ -45,7 +39,6 @@ async function main(): Promise<number> {
   log.info(
     {
       command: 'buy',
-      deposit: options.deposit,
       symbols: symbols.map(s => s.symbol),
       ...loggableConfig(config),
     },
@@ -96,38 +89,11 @@ async function main(): Promise<number> {
       return 1;
     }
 
-    if (!options.deposit) {
-      log.info(
-        {outcome: 'bought', elapsedMs: Date.now() - startedAt},
-        'cli finished',
-      );
-      print('Skipping deposit (--no-deposit). Run `npm run deposit` later.');
-      return 0;
-    }
-
-    const toDeposit = symbols.filter(s => boughtSymbols.has(s.symbol));
-    const depositItems: DepositRequestItem[] = await Promise.all(
-      toDeposit.map(async s => {
-        const depositService = await container.createDepositService(s);
-        return {
-          symbol: s.symbol,
-          usdg: depositService.tokens.usdg,
-          stock: depositService.tokens.stock,
-          rangeDeviationPercent: s.rangeDeviationPercent,
-          depositService,
-        };
-      }),
+    log.info(
+      {outcome: 'bought', elapsedMs: Date.now() - startedAt},
+      'cli finished',
     );
-
-    const deposited = await runDepositCommand({
-      items: depositItems,
-      confirm,
-      print,
-    });
-
-    const outcome = deposited ? 'deposited' : 'bought-not-deposited';
-    log.info({outcome, elapsedMs: Date.now() - startedAt}, 'cli finished');
-    return deposited ? 0 : 1;
+    return 0;
   } catch (error) {
     const context = error instanceof ArcusError ? {...error} : {};
     const message = error instanceof Error ? error.message : String(error);

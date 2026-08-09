@@ -39,10 +39,7 @@ describe('loadSymbols', () => {
       symbol: 'NVDA',
       stockTokenAddress: NVDA,
       usdgBuyAmount: '100',
-      poolFee: 3000,
-      rangeDeviationPercent: 3,
-      lpSlippageBps: 50,
-      exitConfirmations: 3,
+      slippageBps: 1,
       twapChunks: 1,
       twapIntervalSeconds: 10,
       maxPriceImpactBps: 100,
@@ -78,30 +75,32 @@ describe('loadSymbols', () => {
       {
         symbol: 'NVDA',
         stockTokenAddress: NVDA,
-        poolFee: 500,
+        maxPriceImpactBps: 25,
         usdgBuyAmount: '25',
       },
     ]);
 
     const [resolved] = loadSymbols(filePath, defaults());
 
-    expect(resolved!.poolFee).toBe(500);
+    expect(resolved!.maxPriceImpactBps).toBe(25);
     expect(resolved!.usdgBuyAmount).toBe('25');
     // Untouched fields still fall back.
-    expect(resolved!.rangeDeviationPercent).toBe(3);
+    expect(resolved!.slippageBps).toBe(1);
   });
 
   it('resolves multiple symbols independently', () => {
     write([
-      {symbol: 'NVDA', stockTokenAddress: NVDA, poolFee: 500},
+      {symbol: 'NVDA', stockTokenAddress: NVDA, maxPriceImpactBps: 25},
       {symbol: 'AAPL', stockTokenAddress: AAPL},
     ]);
 
     const resolved = loadSymbols(filePath, defaults());
 
     expect(resolved).toHaveLength(2);
-    expect(resolved.find(s => s.symbol === 'NVDA')?.poolFee).toBe(500);
-    expect(resolved.find(s => s.symbol === 'AAPL')?.poolFee).toBe(3000);
+    expect(resolved.find(s => s.symbol === 'NVDA')?.maxPriceImpactBps).toBe(25);
+    expect(resolved.find(s => s.symbol === 'AAPL')?.maxPriceImpactBps).toBe(
+      100,
+    );
   });
 
   it('rejects a symbol with no usdgBuyAmount and no fallback', () => {

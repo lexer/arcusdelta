@@ -51,13 +51,6 @@ export interface Config extends MarketDataConfig {
   /** Fallback only; a symbol with no amount from either source is a config error. */
   readonly usdgBuyAmount: string | undefined;
   readonly slippageBps: number;
-  readonly rangeDeviationPercent: number;
-  readonly poolFee: number;
-  readonly lpSlippageBps: number;
-  readonly mintDeadlineSeconds: number;
-  readonly poolCheckIntervalSeconds: number;
-  readonly exitConfirmations: number;
-  readonly closeSlippageBps: number;
   readonly twapChunks: number;
   readonly twapIntervalSeconds: number;
   readonly maxPriceImpactBps: number;
@@ -119,13 +112,6 @@ export function loadConfig(source: EnvSource = readDotenv()): Config {
     journalPath: env.JOURNAL_PATH,
     usdgBuyAmount: env.USDG_BUY_AMOUNT,
     slippageBps: env.SLIPPAGE_BPS,
-    rangeDeviationPercent: env.RANGE_DEVIATION_PERCENT,
-    poolFee: env.POOL_FEE,
-    lpSlippageBps: env.LP_SLIPPAGE_BPS,
-    mintDeadlineSeconds: env.MINT_DEADLINE_SECONDS,
-    poolCheckIntervalSeconds: env.POOL_CHECK_INTERVAL_SECONDS,
-    exitConfirmations: env.EXIT_CONFIRMATIONS,
-    closeSlippageBps: env.CLOSE_SLIPPAGE_BPS,
     twapChunks: env.TWAP_CHUNKS,
     twapIntervalSeconds: env.TWAP_INTERVAL_SECONDS,
     maxPriceImpactBps: env.MAX_PRICE_IMPACT_BPS,
@@ -155,13 +141,6 @@ export function loggableConfig(config: Config): Record<string, unknown> {
     fundingRequestIntervalMs: config.fundingRequestIntervalMs,
     usdgBuyAmount: config.usdgBuyAmount,
     slippageBps: config.slippageBps,
-    rangeDeviationPercent: config.rangeDeviationPercent,
-    poolFee: config.poolFee,
-    lpSlippageBps: config.lpSlippageBps,
-    mintDeadlineSeconds: config.mintDeadlineSeconds,
-    poolCheckIntervalSeconds: config.poolCheckIntervalSeconds,
-    exitConfirmations: config.exitConfirmations,
-    closeSlippageBps: config.closeSlippageBps,
     twapChunks: config.twapChunks,
     twapIntervalSeconds: config.twapIntervalSeconds,
     maxPriceImpactBps: config.maxPriceImpactBps,

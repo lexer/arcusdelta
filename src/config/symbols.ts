@@ -16,14 +16,7 @@ export interface SymbolConfig {
   readonly symbol: string;
   readonly stockTokenAddress: Hex;
   readonly usdgBuyAmount: string;
-  readonly poolFee: number;
-  readonly rangeDeviationPercent: number;
   readonly slippageBps: number;
-  readonly lpSlippageBps: number;
-  readonly mintDeadlineSeconds: number;
-  readonly poolCheckIntervalSeconds: number;
-  readonly exitConfirmations: number;
-  readonly closeSlippageBps: number;
   readonly twapChunks: number;
   readonly twapIntervalSeconds: number;
   readonly maxPriceImpactBps: number;
@@ -42,17 +35,7 @@ function resolveEntry(entry: SymbolEntry, defaults: Config): SymbolConfig {
     symbol: entry.symbol,
     stockTokenAddress: entry.stockTokenAddress,
     usdgBuyAmount,
-    poolFee: entry.poolFee ?? defaults.poolFee,
-    rangeDeviationPercent:
-      entry.rangeDeviationPercent ?? defaults.rangeDeviationPercent,
     slippageBps: entry.slippageBps ?? defaults.slippageBps,
-    lpSlippageBps: entry.lpSlippageBps ?? defaults.lpSlippageBps,
-    mintDeadlineSeconds:
-      entry.mintDeadlineSeconds ?? defaults.mintDeadlineSeconds,
-    poolCheckIntervalSeconds:
-      entry.poolCheckIntervalSeconds ?? defaults.poolCheckIntervalSeconds,
-    exitConfirmations: entry.exitConfirmations ?? defaults.exitConfirmations,
-    closeSlippageBps: entry.closeSlippageBps ?? defaults.closeSlippageBps,
     twapChunks: entry.twapChunks ?? defaults.twapChunks,
     twapIntervalSeconds:
       entry.twapIntervalSeconds ?? defaults.twapIntervalSeconds,

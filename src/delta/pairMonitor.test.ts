@@ -228,6 +228,81 @@ describe('PairMonitor.check', () => {
   });
 });
 
+describe('PairMonitor funding sync', () => {
+  it('records newly settled funding before valuing', async () => {
+    const sync = vi.fn().mockResolvedValue({
+      recorded: 1,
+      skipped: 0,
+      recordedTotal: 0.0001,
+    });
+    const monitor = new PairMonitor({
+      pairs: [makePair()],
+      shorts: {positions: vi.fn().mockResolvedValue([makePosition()])},
+      marketData: {getBbo: vi.fn()},
+      journal: memoryJournal([spotBuy('NVDA', '11.93454', '0.0529')]),
+      logger,
+      minProfitBps: 0,
+      deltaToleranceBps: 100,
+      checkIntervalSeconds: 30,
+      funding: {sync},
+      sleep: async () => {},
+    });
+
+    await monitor.check();
+
+    expect(sync).toHaveBeenCalledTimes(1);
+    const resolve = sync.mock.calls[0]![0] as (m: string) => string | undefined;
+    expect(resolve('NVDA-USD')).toBe('NVDA');
+    expect(resolve('SPCX-USD')).toBeUndefined();
+  });
+
+  it('never records funding for a short the strategy does not own', async () => {
+    const sync = vi
+      .fn()
+      .mockResolvedValue({recorded: 0, skipped: 0, recordedTotal: 0});
+    const monitor = new PairMonitor({
+      // Watched as a candidate, but the spot balance does not match: this is
+      // the operator's own short, and its funding is not this bot's carry.
+      pairs: [makePair({readSpotBalance: async () => '0.0072'})],
+      shorts: {
+        positions: vi.fn().mockResolvedValue([makePosition({size: '-265.26'})]),
+      },
+      marketData: {getBbo: vi.fn()},
+      journal: memoryJournal(),
+      logger,
+      minProfitBps: 0,
+      deltaToleranceBps: 100,
+      checkIntervalSeconds: 30,
+      funding: {sync},
+      sleep: async () => {},
+    });
+
+    const {foreign} = await monitor.check();
+
+    expect(foreign).toEqual(['NVDA-USD']);
+    expect(sync).not.toHaveBeenCalled();
+  });
+
+  it('keeps valuing when the funding sync fails', async () => {
+    const monitor = new PairMonitor({
+      pairs: [makePair()],
+      shorts: {positions: vi.fn().mockResolvedValue([makePosition()])},
+      marketData: {getBbo: vi.fn()},
+      journal: memoryJournal([spotBuy('NVDA', '11.93454', '0.0529')]),
+      logger,
+      minProfitBps: 0,
+      deltaToleranceBps: 100,
+      checkIntervalSeconds: 30,
+      funding: {sync: vi.fn().mockRejectedValue(new Error('rate limited'))},
+      sleep: async () => {},
+    });
+
+    const {opportunities} = await monitor.check();
+
+    expect(opportunities).toHaveLength(1);
+  });
+});
+
 describe('PairMonitor.run', () => {
   it('prints a table each pass and stops after maxPasses', async () => {
     const lines: string[] = [];

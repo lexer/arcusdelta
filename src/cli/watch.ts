@@ -17,6 +17,7 @@ import {erc20Abi, formatUnits, type Hex} from 'viem';
 import {loadConfig, loggableConfig} from '../config/config.js';
 import {createContainer} from '../di/container.js';
 import {PairMonitor, type WatchedPair} from '../delta/pairMonitor.js';
+import {FundingRecorder} from '../journal/fundingRecorder.js';
 import {ArcusPerpsClient} from '../perps/arcusPerpsClient.js';
 import {MarketRegistry} from '../perps/marketRegistry.js';
 import {PerpsShortService} from '../perps/perpsShortService.js';
@@ -143,6 +144,13 @@ async function main(): Promise<number> {
     minProfitBps,
     deltaToleranceBps: config.maxDeltaBps,
     checkIntervalSeconds,
+    funding: new FundingRecorder({
+      client: reader,
+      journal,
+      logger,
+      address,
+      accountIndex: config.arcusAccountIndex,
+    }),
   });
 
   print(

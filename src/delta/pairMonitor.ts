@@ -22,6 +22,7 @@
  */
 
 import type {ExecutionJournal} from '../journal/executionJournal.js';
+import type {FundingRecorder} from '../journal/fundingRecorder.js';
 import type {Logger} from '../logging/logger.js';
 import type {ArcusPerpsClient} from '../perps/arcusPerpsClient.js';
 import {absDecimals, addDecimals, subtractDecimals} from '../perps/decimal.js';
@@ -63,6 +64,14 @@ export interface PairMonitorOptions {
   /** Spot/perp size mismatch tolerated before a pair is treated as ours. */
   readonly deltaToleranceBps: number;
   readonly checkIntervalSeconds: number;
+  /**
+   * Mirrors newly settled funding into the journal on each pass.
+   *
+   * Without this the durable record only advances when something else
+   * happens to sync it, and the carry — the whole point of the strategy —
+   * quietly falls behind what the exchange has actually paid.
+   */
+  readonly funding?: Pick<FundingRecorder, 'sync'>;
   readonly sleep?: Sleep;
 }
 
@@ -110,6 +119,8 @@ export class PairMonitor {
 
     const opportunities: CloseOpportunity[] = [];
     const foreign: string[] = [];
+    /** Market -> symbol, for markets this pass confirmed as ours. */
+    const managed = new Map<string, string>();
 
     for (const pair of this.options.pairs) {
       const position = byMarket.get(pair.market);
@@ -132,6 +143,7 @@ export class PairMonitor {
         continue;
       }
 
+      managed.set(pair.market, pair.symbol);
       const quantity = absDecimals(position.size);
       const spotCostUsdg = spotCostFromJournal(
         this.options.journal,
@@ -170,7 +182,35 @@ export class PairMonitor {
       );
     }
 
+    await this.syncFunding(managed);
     return {opportunities, foreign};
+  }
+
+  /**
+   * Records funding paid since the last pass, for the pairs this strategy
+   * actually owns.
+   *
+   * Scoped to `managed` rather than to everything being watched, and run
+   * *after* ownership is decided — the candidate list contains any short on
+   * the account, including the operator's own, and crediting their funding to
+   * this strategy would overstate the carry by orders of magnitude.
+   *
+   * A sync failure is logged and swallowed: the journal falling behind must
+   * not stop the monitor from valuing positions.
+   */
+  private async syncFunding(
+    managed: ReadonlyMap<string, string>,
+  ): Promise<void> {
+    if (this.options.funding === undefined || managed.size === 0) return;
+    const bySymbol = managed;
+    try {
+      await this.options.funding.sync(market => bySymbol.get(market));
+    } catch (error) {
+      this.options.logger.warn(
+        {error: error instanceof Error ? error.message : String(error)},
+        'funding sync failed; valuation continues',
+      );
+    }
   }
 
   /**

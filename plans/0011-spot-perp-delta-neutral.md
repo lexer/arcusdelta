@@ -116,6 +116,24 @@ That confirms the whole scheme-1 signing path against the live engine — canoni
 nanosecond `ct`/`X-Timestamp` agreement, and the bigint body timestamp — and confirms `ALO`
 is genuinely protective rather than silently crossing.
 
+The **maker loop and the ownership guards** were verified against the live book the same
+day (NVDA-USD, 0.03, nothing filled):
+
+| Check | Result |
+| --- | --- |
+| `assertNoExistingPosition` on NVDA-USD (unowned) | passed |
+| `assertNoExistingPosition` on SPCX-USD | refused — `SHORT -265.2607773` |
+| `assertSufficientCollateral` for 0.03 @ 224, 2x headroom | passed against 37,982 free |
+| 2 maker attempts posted at the touch, 5s window each | both rested, neither filled, both cancelled |
+| Afterwards | 0 open orders, no NVDA position, 0 journal entries |
+
+The SPCX refusal is the guard doing its real job: that is the operator's own position, and
+the bot declined to trade the market rather than net into it.
+
+**Not yet verified live: an actual maker fill.** It cannot be forced — a post-only order
+fills only when someone crosses into it — so the fill-accounting and journal-write paths
+rest on unit tests until a real fill happens in normal use.
+
 The funding recorder was verified the same day against the live account: syncing SPCX-USD
 recorded 350 hourly payments totalling **16.640116**, against the exchange's own
 `cumulativeFunding.allTime` of **16.640116011** — an independent match. A second sync

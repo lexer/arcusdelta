@@ -131,8 +131,24 @@ The SPCX refusal is the guard doing its real job: that is the operator's own pos
 the bot declined to trade the market rather than net into it.
 
 **Not yet verified live: an actual maker fill.** It cannot be forced — a post-only order
-fills only when someone crosses into it — so the fill-accounting and journal-write paths
-rest on unit tests until a real fill happens in normal use.
+fills only when someone crosses into it.
+
+A full ~$12 pair rehearsal was attempted twice on **Sunday 2026-08-09**, first joining the
+touch (3 × 20s) and then one tick in front of it (4 × 45s). Neither filled, both aborted
+cleanly leaving no orders and no position. The cause is liquidity, not code: the equity
+underlying is closed at the weekend and NVDA-USD sees **256 trades/24h against BTC-USD's
+24,640** — roughly one trade every six minutes, spread across both sides and every price
+level. A maker fill on an RWA perp outside regular hours is a coin flip at best.
+
+Two consequences worth keeping:
+
+- **The maker-only policy has a liquidity precondition.** Entries should be worked during
+  regular trading hours (04:00–20:00 ET on weekdays); outside them, `maxAttempts` will
+  usually be spent for nothing. This is a scheduling constraint on the strategy, not a bug.
+- **`improveTicks` was added** to the executor as a result. Joining the touch queues behind
+  everything already resting there; one tick of improvement costs 0.45 bps on a $224
+  underlying and makes the order the best bid or offer. Still far cheaper than crossing
+  (full spread + 2.25 bps), and clamped so it can never cross.
 
 The funding recorder was verified the same day against the live account: syncing SPCX-USD
 recorded 350 hourly payments totalling **16.640116**, against the exchange's own

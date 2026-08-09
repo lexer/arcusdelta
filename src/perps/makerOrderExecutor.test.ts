@@ -134,6 +134,79 @@ describe('MakerOrderExecutor.fill', () => {
     expect(placeOrder.mock.calls[0]![0].amounts.price).toBe('224.25');
   });
 
+  it('improves a sell inside the spread for queue priority', async () => {
+    const {executor, placeOrder} = makeExecutor({
+      getOrder: vi
+        .fn()
+        .mockResolvedValue(makeOrder({status: 'FILLED', filledSize: '0.5'})),
+    });
+
+    await executor.fill(request({improveTicks: 1}));
+
+    // Best ask 224.38, one tick better, still above the 224.25 bid.
+    expect(placeOrder.mock.calls[0]![0].amounts.price).toBe('224.37');
+  });
+
+  it('improves a buy upward, toward the ask', async () => {
+    const {executor, placeOrder} = makeExecutor({
+      getOrder: vi
+        .fn()
+        .mockResolvedValue(makeOrder({status: 'FILLED', filledSize: '0.5'})),
+    });
+
+    await executor.fill(request({side: 'BUY', improveTicks: 1}));
+
+    expect(placeOrder.mock.calls[0]![0].amounts.price).toBe('224.26');
+  });
+
+  it('clamps improvement so a sell never crosses the bid', async () => {
+    const {executor, placeOrder} = makeExecutor({
+      getBbo: vi.fn().mockResolvedValue({
+        // One tick wide: 224.37 / 224.38.
+        bestBid: {price: '224.37', size: '10'},
+        bestAsk: {price: '224.38', size: '10'},
+        timestamp: 1,
+      }),
+      getOrder: vi
+        .fn()
+        .mockResolvedValue(makeOrder({status: 'FILLED', filledSize: '0.5'})),
+    });
+
+    await executor.fill(request({improveTicks: 5}));
+
+    // Cannot go below one tick above the bid.
+    expect(placeOrder.mock.calls[0]![0].amounts.price).toBe('224.38');
+  });
+
+  it('clamps improvement so a buy never crosses the ask', async () => {
+    const {executor, placeOrder} = makeExecutor({
+      getBbo: vi.fn().mockResolvedValue({
+        bestBid: {price: '224.37', size: '10'},
+        bestAsk: {price: '224.38', size: '10'},
+        timestamp: 1,
+      }),
+      getOrder: vi
+        .fn()
+        .mockResolvedValue(makeOrder({status: 'FILLED', filledSize: '0.5'})),
+    });
+
+    await executor.fill(request({side: 'BUY', improveTicks: 5}));
+
+    expect(placeOrder.mock.calls[0]![0].amounts.price).toBe('224.37');
+  });
+
+  it('joins the touch when no improvement is asked for', async () => {
+    const {executor, placeOrder} = makeExecutor({
+      getOrder: vi
+        .fn()
+        .mockResolvedValue(makeOrder({status: 'FILLED', filledSize: '0.5'})),
+    });
+
+    await executor.fill(request());
+
+    expect(placeOrder.mock.calls[0]![0].amounts.price).toBe('224.38');
+  });
+
   it('reports a complete fill without cancelling', async () => {
     const {executor, cancelOrder} = makeExecutor({
       getOrder: vi

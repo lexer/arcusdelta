@@ -24,6 +24,7 @@ import {
   addDecimals,
   compareDecimals,
   isPositive,
+  multiplyDecimals,
   subtractDecimals,
   weightedAverage,
 } from './decimal.js';
@@ -51,6 +52,12 @@ export interface MakerOrderRequest {
   readonly repriceSeconds: number;
   /** Placements to try before giving up with whatever filled. */
   readonly maxAttempts: number;
+  /**
+   * Ticks to post in front of the touch for queue priority. `0` joins the
+   * best price and queues behind it; `1` becomes the new best. Clamped so it
+   * can never cross.
+   */
+  readonly improveTicks?: number;
   readonly pollIntervalMs?: number;
 }
 
@@ -115,6 +122,7 @@ export class MakerOrderExecutor {
         targetQuantity: request.targetQuantity,
         maxAttempts: request.maxAttempts,
         repriceSeconds: request.repriceSeconds,
+        improveTicks: request.improveTicks ?? 0,
         reduceOnly: request.reduceOnly === true,
       },
       'maker fill started',
@@ -129,7 +137,7 @@ export class MakerOrderExecutor {
       attempts++;
       const attemptLog = log.child({attempt: attempts});
 
-      const price = await this.touchPrice(request, attemptLog);
+      const price = await this.postPrice(request, attemptLog);
       if (price === undefined) break;
 
       const amounts = this.sizeAttempt(request, price, remaining, attemptLog);
@@ -195,26 +203,70 @@ export class MakerOrderExecutor {
   }
 
   /**
-   * The price to post at: the best ask for a sell, the best bid for a buy.
+   * The price to post at, `improveTicks` in front of the touch.
    *
-   * Joining the touch rather than improving it — improving would cost a tick
-   * for queue priority the strategy does not need, and posting *through* it
-   * would cross.
+   * At `0` the order joins the best ask (selling) or best bid (buying) — the
+   * best maker price available, but queued *behind* everything already there.
+   * In a thin book that can mean never filling: NVDA trades roughly once every
+   * six minutes outside regular hours, and a 60-second window behind a resting
+   * 0.44 filled nothing.
+   *
+   * Each tick of improvement gives up 0.45 bps on a $224 underlying and buys
+   * queue priority. That is still far cheaper than crossing, which costs the
+   * whole spread plus the 2.25 bps taker fee — so improving is usually right
+   * for a strategy that has to get filled to earn anything.
+   *
+   * The improved price is clamped to stay one tick inside the opposite side,
+   * so it can never cross. Post-only would reject a crossing order anyway;
+   * clamping just avoids spending an attempt to discover that.
    */
-  private async touchPrice(
+  private async postPrice(
     request: MakerOrderRequest,
     log: Logger,
   ): Promise<string | undefined> {
     const bbo = await this.marketData.getBbo(request.spec.market);
-    const level = request.side === 'SELL' ? bbo.bestAsk : bbo.bestBid;
-    if (level === null) {
+    const own = request.side === 'SELL' ? bbo.bestAsk : bbo.bestBid;
+    const opposite = request.side === 'SELL' ? bbo.bestBid : bbo.bestAsk;
+    if (own === null) {
       log.warn(
         {side: request.side},
         'no resting liquidity on the side to join; cannot post',
       );
       return undefined;
     }
-    return level.price;
+
+    const improveTicks = request.improveTicks ?? 0;
+    if (improveTicks === 0) return own.price;
+
+    const offset = multiplyDecimals(
+      request.spec.tickSize,
+      String(improveTicks),
+    );
+    const improved =
+      request.side === 'SELL'
+        ? subtractDecimals(own.price, offset)
+        : addDecimals(own.price, offset);
+
+    if (opposite === null) return improved;
+
+    // One tick inside the opposite side is the furthest a post-only order can
+    // go without crossing.
+    const limit =
+      request.side === 'SELL'
+        ? addDecimals(opposite.price, request.spec.tickSize)
+        : subtractDecimals(opposite.price, request.spec.tickSize);
+    const clamped =
+      request.side === 'SELL'
+        ? maxDecimal(improved, limit)
+        : minDecimal(improved, limit);
+
+    if (clamped !== improved) {
+      log.info(
+        {improved, clamped, spreadTop: own.price},
+        'price improvement clamped to stay inside the spread',
+      );
+    }
+    return clamped;
   }
 
   /**
@@ -314,6 +366,14 @@ export class MakerOrderExecutor {
       attempts,
     });
   }
+}
+
+function maxDecimal(a: string, b: string): string {
+  return compareDecimals(a, b) >= 0 ? a : b;
+}
+
+function minDecimal(a: string, b: string): string {
+  return compareDecimals(a, b) <= 0 ? a : b;
 }
 
 /** The engine's way of saying "your post-only order would have taken". */

@@ -18,11 +18,13 @@ Uniswap is no longer part of the strategy and comes out of the repo.
 
 Verified live against the mainnet API on 2026-08-09:
 
-- **A shared universe exists.** 31 symbols are tradable on both sides — the intersection of
-  the spot router's token list and the perp markets with `category != CRYPTO`:
-  `AMD INTC F CCL GOOGL META MU BABA CRCL SLV USO SPY QQQ SGOV NVDA TSLA AAPL AMZN MSFT
-  SNDK PLTR CRWV ORCL SPCX BE USAR COIN SKHY NBIS MSTR MRVL`.
-  (`BAC HOOD GLD VT RVI DRAM BOT` are perp-only; 7 of the 31 have no funding history yet.)
+- **A shared universe exists.** 25 symbols are tradable on both sides — the intersection of
+  the spot router's token list and the **`ONLINE`** perp markets with `category != CRYPTO`:
+  `AMD INTC GOOGL META MU BABA CRCL SLV USO SPY QQQ NVDA TSLA AAPL AMZN MSFT SNDK PLTR
+  CRWV ORCL SPCX BE USAR COIN SKHY`.
+  `HOOD GLD DRAM` are perp-only. A further 10 RWA markets are listed but `OFFLINE`
+  (`F BAC CCL VT SGOV RVI NBIS MSTR MRVL BOT`) and become tradable if they come online —
+  which is why the universe is computed live rather than hard-coded.
 - **RWA perp funding is structurally positive for shorts.** The base rate is
   **SOFR + 0.5%/yr**, charged hourly, with the premium added on top — so a short collects
   roughly the risk-free rate plus the premium, and pays dividends through (see Risks).
@@ -46,6 +48,7 @@ Verified live against the mainnet API on 2026-08-09:
 | Writes | `POST /v1/placeOrder`, `/v1/cancelOrder`, `/v1/cancelAllOrders`, `/v1/setLeverage`, `/v1/withdraw` |
 | Funding rates | hourly, `fundingRate` decimal string, `time` epoch **microseconds**, newest-first, `limit` max 1000 (~41 days/page) |
 | Order constraints | `goodTilTime` (epoch µs) **required on every order, ≥1 month ahead**; min notional $5; `timeInForce` `ALO`=post-only, `IOC`, `FOK`, `GTT`; equities `initialMarginFraction` 0.10 (0.15 off-hours) |
+| Rate limits | Per-IP token bucket: **1,500 weight, refilling 1,500/min**. `bbo`/`account`/`positions`/`order` cost 2; `markets`/`fundingRates`/`openOrders`/`fills` cost 20; `setLeverage`/`withdraw` cost 125; **order writes cost 0** on the IP layer (governed by per-subaccount pools). A 429 returns `Retry-After` in whole seconds. |
 | Collateral | USDG, deposited on-chain via `PaxosDepositProxy.initiateDeposit(owner, accountIndex, token, amount)` at `0xd42c46c7bad6a54b38395f846b09981ce75fb8e2` (chain 4663). **Operator funds this manually** — the bot only reads the balance. |
 
 Node's built-in `node:crypto` does Ed25519 (`generateKeyPairSync('ed25519')`, `sign(null, …)`),
@@ -108,7 +111,7 @@ New:
 | `src/perps/makerOrderExecutor.ts` | The post → poll → re-price → cancel loop for one target quantity. Returns `{filledQty, avgFillPrice, attempts}`. Injectable `Sleep`, exactly as `SpotSwapService` does. |
 | `src/perps/perpsShortService.ts` | `openShort(qty)` / `closeShort(qty)` (reduce-only) on top of `makerOrderExecutor`; reads positions and free collateral. |
 | `src/perps/errors.ts` | `PerpsAuthError`, `PerpsOrderRejectedError`, `PerpsUnfilledError`, `PerpsMarginError`, `PerpsMarketClosedError` — all carrying `tradeId`, matching `src/arcus/errors.ts`. |
-| `src/funding/fundingAnalyzer.ts` | Paginated `/v1/fundingRates` history → per-symbol stats: annualized short carry, % negative hours, worst hour, stddev, sample span. Pure scoring separated from fetching. |
+| `src/funding/fundingAnalyzer.ts` | Paginated `/v1/fundingRates` history → per-symbol stats: annualized short carry, % negative hours, worst hour, stddev, sample span. Pure scoring separated from fetching. **Must pace itself**: 90 days × 25 symbols is ~75 pages at 20 weight each — the entire per-minute IP budget — so it throttles to roughly one request per second on top of the client's `Retry-After` backoff. |
 | `src/funding/universe.ts` | Intersects the spot token list with non-crypto perp markets; the tradable universe. |
 | `src/delta/pairService.ts` | The chunk loop above: orchestrates `PerpsShortService` + `SpotSwapService` for one symbol. |
 | `src/delta/pairMonitor.ts` | Long-running: margin health, delta drift, funding decay; unwinds when a rule fires. |
@@ -199,7 +202,8 @@ excluded from `loggableConfig`, added to the pino redaction paths in `src/loggin
   except the monitor's decay rule.
 - **Unwinding is not free.** The spot leg is RFQ with price impact; the perp buy-back may
   have to cross. Both are real costs against a single-digit APR carry.
-- **7 of the 31 symbols have no funding history yet** and must be excluded until they do.
+- **A market can be listed but `OFFLINE`,** and a newly listed one may have little or no
+  funding history. Both must be excluded rather than scored on thin data.
 
 ## Verification
 

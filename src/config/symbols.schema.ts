@@ -3,6 +3,15 @@
  *
  * Only `symbol` and `stockTokenAddress` are required; every strategy field is
  * optional and falls back to the corresponding `.env` default when omitted.
+ *
+ * The delta-neutral strategy uses `usdgBuyAmount` (the pair notional),
+ * `slippageBps`, `twapChunks`, `twapIntervalSeconds`, and
+ * `maxPriceImpactBps`. The Uniswap fields below it — `poolFee`,
+ * `rangeDeviationPercent`, `lpSlippageBps`, `mintDeadlineSeconds`,
+ * `poolCheckIntervalSeconds`, `exitConfirmations`, `closeSlippageBps` — belong
+ * to the liquidity-position strategy and are removed along with it (plan 0011,
+ * phase 6). They are still accepted so an existing `symbols.json` keeps
+ * loading in the meantime.
  */
 
 import {z} from 'zod';

@@ -18,7 +18,10 @@ import {
   PerpsTransportError,
 } from './errors.js';
 import type {
+  ApiKeyInfo,
   Bbo,
+  CreateApiKeyRequest,
+  CreateApiKeyResponse,
   FundingRateSample,
   FundingRatesRequest,
   L2OrderBook,
@@ -139,12 +142,56 @@ export class ArcusPerpsClient {
     return body.positions;
   }
 
+  /**
+   * Every API key registered to an address. Unauthenticated by design — an
+   * Ed25519 public key is not a secret — which is what makes it usable to
+   * check whether a locally held key is still live before signing anything.
+   */
+  async getApiKeys(address: string): Promise<ApiKeyInfo[]> {
+    const body = await this.get<{apiKeys: ApiKeyInfo[]}>('/v1/apiKeys', {
+      address,
+    });
+    return body.apiKeys ?? [];
+  }
+
+  /**
+   * Registers an Ed25519 public key against an Ethereum address.
+   *
+   * Authorized by the EIP-712 signature in the body rather than by the
+   * Ed25519 headers — the key being registered cannot yet authenticate
+   * anything. Returns 202: the key is accepted but takes a moment to become
+   * usable, so callers should poll {@link getApiKeys} before signing with it.
+   */
+  async createApiKey(
+    request: CreateApiKeyRequest,
+  ): Promise<CreateApiKeyResponse> {
+    return this.post<CreateApiKeyResponse>('/v1/createApiKey', request);
+  }
+
   private async get<T>(path: string, params: QueryParams = {}): Promise<T> {
     const url = new URL(this.baseUrl + path);
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined) url.searchParams.set(key, String(value));
     }
     return this.request<T>('GET', path, url, {}, this.maxRateLimitRetries);
+  }
+
+  /**
+   * `headers` carries the Ed25519 auth triple on endpoints that need it.
+   *
+   * No 429 retry: a POST here either creates a credential or touches an order,
+   * and whether re-sending is safe is the caller's judgement, not the
+   * transport's.
+   */
+  protected async post<T>(
+    path: string,
+    body: unknown,
+    headers: Readonly<Record<string, string>> = {},
+  ): Promise<T> {
+    return this.request<T>('POST', path, new URL(this.baseUrl + path), {
+      headers: {'Content-Type': 'application/json', ...headers},
+      body: JSON.stringify(body),
+    });
   }
 
   /**

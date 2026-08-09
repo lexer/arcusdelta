@@ -131,6 +131,46 @@ export interface PerpPosition {
   readonly markPx: string;
 }
 
+/** `(r, s, v)` from an EIP-712 signature, as the gateway expects it. */
+export interface EthereumSignature {
+  readonly r: string;
+  readonly s: string;
+  readonly v: string;
+}
+
+export interface CreateApiKeyRequest {
+  readonly address: string;
+  /** 64 hex chars, no `0x`. The Ed25519 public key becomes the API key. */
+  readonly publicKey: string;
+  readonly apiWalletName: string;
+  /**
+   * Epoch ms. Must be 1–180 days ahead. Always send it explicitly: omitting
+   * it makes the server verify against its own 14-day default, which will not
+   * match what was signed.
+   */
+  readonly validUntil: number;
+  readonly signature: EthereumSignature;
+}
+
+export interface CreateApiKeyResponse {
+  readonly apiKey: string;
+  readonly address: string;
+  readonly accountIndex?: number;
+  readonly validUntil?: number;
+  /** Epoch microseconds. */
+  readonly createdAt: number;
+}
+
+/** One registered key as `GET /v1/apiKeys` reports it. */
+export interface ApiKeyInfo {
+  readonly apiKey: string;
+  readonly address?: string;
+  readonly apiWalletName?: string;
+  readonly accountIndex?: number;
+  readonly validUntil?: number;
+  readonly createdAt?: number;
+}
+
 /** `GET /v1/account`. Balances are in full quote currency (USDG ~ USD). */
 export interface PerpAccount {
   readonly address: string;

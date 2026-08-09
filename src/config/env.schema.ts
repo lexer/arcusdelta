@@ -58,6 +58,25 @@ export const marketDataEnvSchema = z.object({
 export const envSchema = marketDataEnvSchema.extend({
   SEED: z.string().min(1, 'SEED is required (production wallet mnemonic)'),
   RPC_URL: z.string().url().default('https://rpc.mainnet.chain.robinhood.com'),
+
+  /**
+   * Ed25519 private key for the Arcus perps API, 32 bytes of hex. Generate
+   * and register it with `npm run apikey`.
+   *
+   * A secret of the same class as `SEED`: anything holding it can place and
+   * cancel orders on the perps account. Optional so read-only and spot-only
+   * commands still start without it; the perps order path fails fast when it
+   * is missing.
+   */
+  ARCUS_API_PRIVATE_KEY: z
+    .string()
+    .regex(
+      /^(0x)?[0-9a-fA-F]{64}$/,
+      'must be 32 bytes of hex (64 characters), optionally 0x-prefixed',
+    )
+    .optional(),
+  /** Subaccount to trade. 0 unless you deliberately use another. */
+  ARCUS_ACCOUNT_INDEX: z.coerce.number().int().min(0).max(9).default(0),
   /**
    * Fallback when a symbols.json entry omits its own usdgBuyAmount. No
    * default of its own: a symbol with no amount from either source is a

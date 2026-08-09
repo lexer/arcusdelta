@@ -15,10 +15,16 @@ const REDACTED_PATHS = [
   'SEED',
   'mnemonic',
   'privateKey',
+  'privateKeyHex',
+  'arcusApiPrivateKey',
+  'ARCUS_API_PRIVATE_KEY',
   '*.seed',
   '*.SEED',
   '*.mnemonic',
   '*.privateKey',
+  '*.privateKeyHex',
+  '*.arcusApiPrivateKey',
+  '*.ARCUS_API_PRIVATE_KEY',
 ];
 
 export function createLogger(

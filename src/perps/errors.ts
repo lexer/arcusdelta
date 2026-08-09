@@ -58,6 +58,12 @@ export class PerpsTransportError extends PerpsError {
   }
 }
 
+/**
+ * The API key could not be created or used — a malformed key, an expiry
+ * outside the gateway's window, or a signature the gateway would not accept.
+ */
+export class PerpsAuthError extends PerpsError {}
+
 /** No perp market matches the requested name or base asset. */
 export class PerpMarketNotFoundError extends PerpsError {}
 

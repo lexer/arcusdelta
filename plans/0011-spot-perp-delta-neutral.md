@@ -57,6 +57,28 @@ Verified live against the mainnet API on 2026-08-09:
 Node's built-in `node:crypto` does Ed25519 (`generateKeyPairSync('ed25519')`, `sign(null, …)`),
 so no new dependency. `viem`'s `signTypedData` covers the EIP-712 registration.
 
+## The production perps account is already in use
+
+Read from mainnet on 2026-08-09 for `0xaECac9f39c5808f6A9f0938E644dCbB4db8c6580`,
+`accountIndex` 0:
+
+- Two **API keys already registered** — `Arcus Web API` and `openclose`. This bot does not
+  hold either private key; `npm run apikey` registers a third that it does.
+- Equity ~$105k, free collateral ~$38k, no open orders.
+- **Two open positions this bot did not create**: `TSLA-USD` LONG 94.36 @ 318.35 and
+  `SPCX-USD` SHORT 265.26 @ 113.01.
+- `accountIndex` 1–3 are empty (`this account has no activity yet`).
+
+Two consequences the order path must respect:
+
+- **Perp positions net per market.** Shorting TSLA on `accountIndex` 0 would *reduce* the
+  existing manual long rather than open a hedge, and there is no position id to tell the
+  bot's share from anyone else's. This is the same hazard the v3 exit path had with foreign
+  position NFTs, except netting makes it worse — there is nothing to filter on.
+- **`cancelAllOrders` is off-limits.** It cancels every open order for `(address,
+  accountIndex)`, including any the web app or the `openclose` key placed. The maker
+  executor cancels **by order id only**.
+
 ## Decisions taken
 
 - **Uniswap comes out** in a dedicated cleanup commit, after the perps path works.
@@ -99,7 +121,8 @@ Key properties:
   signed difference carries into the next chunk's sizing, and the remainder is reported.
 - **A perp fill with no spot fill is unwound immediately** with a reduce-only IOC — paying
   the taker fee is the correct price for not being left net short.
-- Every path cancels its resting order before returning; abort calls `cancelAllOrders`.
+- Every path cancels its resting order before returning — **by order id, never
+  `cancelAllOrders`**, which would also kill orders placed by the other keys on this wallet.
 
 ## Modules
 
@@ -180,7 +203,11 @@ excluded from `loggableConfig`, added to the pino redaction paths in `src/loggin
 3. **Auth.** `signing.ts` + `apiKeyService` + `npm run apikey`. Unit-test the canonical
    payload byte-for-byte against the documented field order; add the redaction path.
 4. **Perp order path.** `makerOrderExecutor` + `perpsShortService` + write endpoints.
-   Verified end to end on **testnet** (`api.testnet.arcus.xyz`, chain 46630) before mainnet.
+   Verified on **mainnet** — testnet is deliberately not used. The safe first step is a
+   post-only sell priced far above the touch: `ALO` cannot cross, so it rests without
+   filling, which exercises signing, placement, order status, and cancellation with no
+   position opened. Requires the perps account to already hold collateral, since even a
+   resting order reserves initial margin.
 5. **Pairing.** `delta/pairService`, `npm run quote`, `npm run open`, `npm run positions`,
    the funding gate, and the unwind-on-spot-failure path.
 6. **Uniswap removal.** Delete `src/uniswap/`, the LP CLI entrypoints, `src/pnl/`, the LP
@@ -215,10 +242,12 @@ excluded from `loggableConfig`, added to the pino redaction paths in `src/loggin
   `curl "https://api.arcus.xyz/v1/fundingRates?market=NVDA-USD&limit=1000"`.
 - **Phase 3:** `npm run apikey`, then confirm the key is listed by
   `curl "https://api.arcus.xyz/v1/apiKeys?address=<wallet>"`.
-- **Phase 4, testnet only:** point `ARCUS_API_URL` at `https://api.testnet.arcus.xyz`, fund
-  a testnet account, and place / re-price / cancel / fill a real ALO order. Confirm the
-  signature scheme by getting a `200`, and confirm post-only by placing through the touch
-  and getting a rejection rather than a taker fill.
+- **Phase 4, mainnet, no fill:** place a post-only (`ALO`) sell well above the best ask.
+  It cannot cross, so it rests: confirm the signature scheme by getting a `200`/`202`,
+  read it back through `GET /v1/order/{orderId}`, then cancel it. Then confirm post-only
+  really is protective by placing one *through* the touch and getting a rejection rather
+  than a taker fill. Nothing fills in either case. **Prerequisite:** the perps account
+  must already hold USDG collateral — a resting order still reserves initial margin.
 - **Phase 5, mainnet smallest size:** one symbol, `twapChunks: 1`, `usdgBuyAmount` just over
   the $5 minimum notional. Verify with `npm run positions` that the perp short size and the
   spot balance match within `maxDeltaBps`, and that `GET /v1/positions` shows the short.

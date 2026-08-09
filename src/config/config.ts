@@ -40,6 +40,12 @@ export interface MarketDataConfig {
 export interface Config extends MarketDataConfig {
   readonly seed: string;
   readonly rpcUrl: string;
+  /**
+   * Secret, like `seed`. Undefined until `npm run apikey` has been run; only
+   * the perps order path requires it.
+   */
+  readonly arcusApiPrivateKey: string | undefined;
+  readonly arcusAccountIndex: number;
   /** Fallback only; a symbol with no amount from either source is a config error. */
   readonly usdgBuyAmount: string | undefined;
   readonly slippageBps: number;
@@ -95,6 +101,8 @@ export function loadConfig(source: EnvSource = readDotenv()): Config {
   return Object.freeze({
     seed: env.SEED,
     rpcUrl: env.RPC_URL,
+    arcusApiPrivateKey: env.ARCUS_API_PRIVATE_KEY,
+    arcusAccountIndex: env.ARCUS_ACCOUNT_INDEX,
     chainId: env.CHAIN_ID,
     arcusRouterUrl: env.ARCUS_ROUTER_URL,
     arcusApiUrl: env.ARCUS_API_URL,
@@ -115,13 +123,20 @@ export function loadConfig(source: EnvSource = readDotenv()): Config {
   });
 }
 
-/** Config fields that are safe to log — everything except the seed. */
+/**
+ * Config fields that are safe to log — everything except the two secrets,
+ * `seed` and `arcusApiPrivateKey`. Both are additionally covered by the pino
+ * redaction paths, so omitting them here is the first of two guards.
+ */
 export function loggableConfig(config: Config): Record<string, unknown> {
   return {
     rpcUrl: config.rpcUrl,
     chainId: config.chainId,
     arcusRouterUrl: config.arcusRouterUrl,
     arcusApiUrl: config.arcusApiUrl,
+    arcusAccountIndex: config.arcusAccountIndex,
+    /** Whether a key is configured — never the key itself. */
+    arcusApiKeyConfigured: config.arcusApiPrivateKey !== undefined,
     fundingLookbackDays: config.fundingLookbackDays,
     fundingRequestIntervalMs: config.fundingRequestIntervalMs,
     usdgBuyAmount: config.usdgBuyAmount,

@@ -68,6 +68,8 @@ Read from mainnet on 2026-08-09 for `0xaECac9f39c5808f6A9f0938E644dCbB4db8c6580`
 - **Two open positions this bot did not create**: `TSLA-USD` LONG 94.36 @ 318.35 and
   `SPCX-USD` SHORT 265.26 @ 113.01.
 - `accountIndex` 1–3 are empty (`this account has no activity yet`).
+- Spot wallet holds ~129,523 USDG and only **dust** of the tokens matching those positions
+  (SPCX 0.0072, TSLA 0.0014) — nowhere near the 265 SPCX short or the 94 TSLA long.
 
 Two consequences the order path must respect:
 
@@ -89,6 +91,29 @@ Two consequences the order path must respect:
   refuses to open when free collateral is short.
 - **Perp leg goes first, per TWAP chunk, as a resting maker order** — to avoid paying the
   spread and the taker fee on the leg that has an order book.
+- **The bot trades `accountIndex` 0 alongside the existing manual positions**, behind the
+  guards below rather than in an isolated subaccount.
+- **Taker orders only to unwind a stranded leg.** Entries are always post-only. The single
+  exception is a perp fill whose spot leg then failed: that is bought back immediately with
+  a reduce-only IOC, because paying 2.25 bps beats holding an unhedged leveraged short. A
+  chunk that will not fill as a maker aborts; it never crosses to complete.
+
+### The guards, and why they need no local ledger
+
+A perp position has no id and nets per market, so "did the bot open this?" has to be
+answered from observable state. Two rules do it:
+
+- **Opening** refuses symbol `X` outright if *any* perp position already exists in market
+  `X`. That is what keeps a bot short from silently reducing the manual TSLA long.
+- **Managing** (monitor, close, pnl) treats market `X` as a bot-created pair only when the
+  position is **SHORT** *and* the wallet's spot balance of `X` matches the short size within
+  `maxDeltaBps` — the structural signature of a delta-neutral pair. Both existing positions
+  fail this: TSLA is long, and the SPCX short is 265 against a 0.0072 spot balance.
+  Symbols must additionally be listed in `symbols.json`, so the operator opts in explicitly.
+
+`npm run positions` lists every position and labels each **managed** or **foreign**, so the
+distinction is visible rather than implied. This keeps the "no local ledger" property the
+PnL reporting already relies on: state is reconstructed, never remembered.
 
 ## Execution model
 
@@ -120,7 +145,9 @@ Key properties:
   `sellAmount`), so the base amount received never lands exactly on the perp size. The
   signed difference carries into the next chunk's sizing, and the remainder is reported.
 - **A perp fill with no spot fill is unwound immediately** with a reduce-only IOC — paying
-  the taker fee is the correct price for not being left net short.
+  the taker fee is the correct price for not being left net short. `reduceOnly` matters
+  here beyond politeness: it guarantees the buy-back cannot overshoot into a long if the
+  position moved underneath it.
 - Every path cancels its resting order before returning — **by order id, never
   `cancelAllOrders`**, which would also kill orders placed by the other keys on this wallet.
 

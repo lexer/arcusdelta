@@ -42,3 +42,6 @@ pnpm-debug.log*
 
 # OS
 .DS_Store
+
+# One-off live rehearsal scripts, never part of the repo
+sequence.mts

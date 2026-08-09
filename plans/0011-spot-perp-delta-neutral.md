@@ -81,6 +81,41 @@ Two consequences the order path must respect:
   accountIndex)`, including any the web app or the `openclose` key placed. The maker
   executor cancels **by order id only**.
 
+## Order placement is geo-gated
+
+`POST /v1/placeOrder` is gated on the caller's network location. From a restricted one it
+returns `403` with `code: GEO_RESTRICTED` — "This product is not available in your country
+or region" — while **every read endpoint keeps working**. So `npm run funding`, monitoring,
+and PnL reporting are unaffected by this, but nothing can be opened or closed.
+
+`GET /v1/compliance?address=…` reports the current posture and is the thing to check first
+when a write fails:
+
+```json
+{"geo":{"country":"MX","region":"MX-QUE",
+        "restrictions":{"perpetuals":false,"spot":false},"bypassed":false},
+ "address":{"address":"0xaECac9f…6580","status":"COMPLIANT"}}
+```
+
+`address.status` is about the wallet; `geo.restrictions` is about where the request came
+from. Both must be clear. A `403` on an order with a `COMPLIANT` wallet means the location,
+not the account.
+
+### Live verification, 2026-08-09 (mainnet, NVDA-USD)
+
+Both order-path checks passed, with nothing filled and no position touched:
+
+| Check | Result |
+| --- | --- |
+| Post-only `SELL 0.03 @ 228.00`, best ask 224.38 | `OPEN` — rested, `filledSize 0`, `remainingSize 0.03` |
+| `getOrder` read-back, then `cancelOrder` by id | `CANCELED`, `filledSize 0` |
+| Post-only `SELL 0.03 @ 224.20`, through the 224.25 bid | Rejected `POST_ONLY_WOULD_CROSS` — never filled as a taker |
+| Open orders and positions afterwards | 0 open orders; TSLA and SPCX unchanged |
+
+That confirms the whole scheme-1 signing path against the live engine — canonical payload,
+nanosecond `ct`/`X-Timestamp` agreement, and the bigint body timestamp — and confirms `ALO`
+is genuinely protective rather than silently crossing.
+
 ## Decisions taken
 
 - **Uniswap comes out** in a dedicated cleanup commit, after the perps path works.

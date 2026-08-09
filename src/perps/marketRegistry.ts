@@ -11,7 +11,11 @@
  */
 
 import {formatUnits, parseUnits} from 'viem';
-import {PerpMarketNotFoundError, PerpsAlignmentError} from './errors.js';
+import {
+  PerpMarketNotFoundError,
+  PerpsAlignmentError,
+  PerpsOrderSizeError,
+} from './errors.js';
 import type {MarketSpec, PerpMarket} from './types.js';
 
 /**
@@ -96,6 +100,68 @@ export function compareDecimals(a: string, b: string): number {
   const right = scale(b);
   if (left < right) return -1;
   return left > right ? 1 : 0;
+}
+
+/**
+ * A price/size pair in both the human form the HTTP body carries and the
+ * integer form the signature covers.
+ *
+ * They are produced together, from one validation, so a body and a signature
+ * can never describe different amounts.
+ */
+export interface EngineOrderAmounts {
+  readonly price: string;
+  readonly quantity: string;
+  readonly priceTicks: bigint;
+  readonly quantityQuantums: bigint;
+}
+
+/**
+ * Validates a price and size against a market's grid and limits, and converts
+ * them to engine integers.
+ *
+ * Every rejection here is one the engine would make anyway — `Tick`,
+ * `OrderSizeTooLarge`, or the $5 minimum notional — caught before a signature
+ * exists rather than after a round trip.
+ */
+export function toEngineOrder(
+  spec: MarketSpec,
+  price: string,
+  quantity: string,
+  options: {readonly reduceOnly?: boolean} = {},
+): EngineOrderAmounts {
+  const priceTicks = toIncrements(price, spec.tickSize);
+  const quantityQuantums = toIncrements(quantity, spec.stepSize);
+
+  if (priceTicks <= 0n) {
+    throw new PerpsOrderSizeError(`Price must be positive, got ${price}`);
+  }
+  if (quantityQuantums <= 0n) {
+    throw new PerpsOrderSizeError(`Quantity must be positive, got ${quantity}`);
+  }
+  if (compareDecimals(quantity, spec.maxOrderSize) > 0) {
+    throw new PerpsOrderSizeError(
+      `Quantity ${quantity} exceeds ${spec.market} maxOrderSize ${spec.maxOrderSize}`,
+    );
+  }
+  if (compareDecimals(quantity, spec.minOrderSize) < 0) {
+    throw new PerpsOrderSizeError(
+      `Quantity ${quantity} is below ${spec.market} minOrderSize ${spec.minOrderSize}`,
+    );
+  }
+
+  // Reduce-only orders are exempt from the minimum notional, since closing a
+  // small remainder is exactly what they are for.
+  if (options.reduceOnly !== true) {
+    const notional = multiplyDecimals(price, quantity);
+    if (compareDecimals(notional, spec.minOrderNotional) < 0) {
+      throw new PerpsOrderSizeError(
+        `Notional ${notional} is below ${spec.market} minOrderNotional ${spec.minOrderNotional}`,
+      );
+    }
+  }
+
+  return {price, quantity, priceTicks, quantityQuantums};
 }
 
 /** Keeps only the fields that do not change between polls. */

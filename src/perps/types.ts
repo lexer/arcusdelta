@@ -131,6 +131,81 @@ export interface PerpPosition {
   readonly markPx: string;
 }
 
+export type OrderSideName = 'BUY' | 'SELL';
+export type OrderTypeName = 'LIMIT' | 'MARKET';
+export type TimeInForceName = 'GTT' | 'IOC' | 'FOK' | 'ALO';
+
+/**
+ * Terminal and non-terminal order states.
+ *
+ * `ACK` means the gateway accepted the order and forwarded it to the matching
+ * engine but has no definitive state yet — it is not a fill and not a rest.
+ */
+export const TERMINAL_ORDER_STATUSES: ReadonlySet<string> = new Set([
+  'FILLED',
+  'CANCELED',
+  'MARGIN_CANCELED',
+  'REJECTED',
+  'LIQUIDATED',
+  'ADL',
+  'ERROR',
+]);
+
+/** Body of `POST /v1/placeOrder`. Prices and sizes are human decimals. */
+export interface OrderRequest {
+  readonly address: string;
+  readonly accountIndex: number;
+  readonly marketId: number;
+  readonly orderSide: OrderSideName;
+  readonly orderType: OrderTypeName;
+  readonly quantity: string;
+  readonly price: string;
+  readonly timeInForce: TimeInForceName;
+  /** Epoch **microseconds**, at least a month ahead. Required on every order. */
+  readonly goodTilTime: string;
+  readonly reduceOnly?: boolean;
+  readonly clientId?: string;
+  /**
+   * Unix **nanoseconds**, equal to `X-Timestamp` and to the signed `ct`.
+   * A `bigint` because the value exceeds `Number.MAX_SAFE_INTEGER` — see
+   * `signing.ts`.
+   */
+  readonly timestamp: bigint;
+}
+
+/** Response to a place or a status read. */
+export interface OrderResponse {
+  readonly address: string;
+  readonly accountIndex: number;
+  readonly orderId: string;
+  readonly clientId?: string;
+  readonly marketId: number;
+  readonly marketDisplayName: string;
+  readonly side: OrderSideName;
+  readonly type?: OrderTypeName;
+  readonly timeInForce?: string;
+  readonly quantity?: string;
+  readonly originalSize?: string;
+  readonly price: string;
+  readonly reduceOnly?: boolean;
+  readonly status: string;
+  readonly createdAt: number;
+  readonly updatedAt?: number;
+  readonly remainingSize?: string;
+  readonly filledSize?: string;
+  readonly averageFillPrice?: string;
+  readonly rejectionReason?: string;
+}
+
+export interface CancelOrderRequest {
+  readonly address: string;
+  readonly accountIndex: number;
+  readonly marketId: number;
+  readonly orderId?: string;
+  readonly clientId?: string;
+  readonly timestamp: bigint;
+}
+
 /** `(r, s, v)` from an EIP-712 signature, as the gateway expects it. */
 export interface EthereumSignature {
   readonly r: string;

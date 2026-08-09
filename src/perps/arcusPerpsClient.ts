@@ -12,6 +12,7 @@
  */
 
 import type {Logger} from '../logging/logger.js';
+import {canonicalJson} from './signing.js';
 import {
   PerpsApiError,
   PerpsRateLimitError,
@@ -91,17 +92,17 @@ export class ArcusPerpsClient {
 
   /** Every configured market, including the crypto ones this bot ignores. */
   async getMarkets(): Promise<PerpMarket[]> {
-    const body = await this.get<{markets: PerpMarket[]}>('/v1/markets');
+    const body = await this.getJson<{markets: PerpMarket[]}>('/v1/markets');
     return body.markets;
   }
 
   /** Top of book. Either side is null when nothing is resting on it. */
   async getBbo(market: string): Promise<Bbo> {
-    return this.get<Bbo>(`/v1/bbo/${encodeURIComponent(market)}`);
+    return this.getJson<Bbo>(`/v1/bbo/${encodeURIComponent(market)}`);
   }
 
   async getL2OrderBook(market: string, levels?: number): Promise<L2OrderBook> {
-    return this.get<L2OrderBook>(
+    return this.getJson<L2OrderBook>(
       `/v1/l2OrderBook/${encodeURIComponent(market)}`,
       levels === undefined ? {} : {levels},
     );
@@ -115,7 +116,7 @@ export class ArcusPerpsClient {
   async getFundingRates(
     request: FundingRatesRequest,
   ): Promise<FundingRateSample[]> {
-    const body = await this.get<{fundingRates: FundingRateSample[]}>(
+    const body = await this.getJson<{fundingRates: FundingRateSample[]}>(
       '/v1/fundingRates',
       {
         market: request.market,
@@ -128,17 +129,20 @@ export class ArcusPerpsClient {
   }
 
   async getAccount(address: string, accountIndex = 0): Promise<PerpAccount> {
-    return this.get<PerpAccount>('/v1/account', {address, accountIndex});
+    return this.getJson<PerpAccount>('/v1/account', {address, accountIndex});
   }
 
   async getPositions(
     address: string,
     accountIndex = 0,
   ): Promise<PerpPosition[]> {
-    const body = await this.get<{positions: PerpPosition[]}>('/v1/positions', {
-      address,
-      accountIndex,
-    });
+    const body = await this.getJson<{positions: PerpPosition[]}>(
+      '/v1/positions',
+      {
+        address,
+        accountIndex,
+      },
+    );
     return body.positions;
   }
 
@@ -148,7 +152,7 @@ export class ArcusPerpsClient {
    * check whether a locally held key is still live before signing anything.
    */
   async getApiKeys(address: string): Promise<ApiKeyInfo[]> {
-    const body = await this.get<{apiKeys: ApiKeyInfo[]}>('/v1/apiKeys', {
+    const body = await this.getJson<{apiKeys: ApiKeyInfo[]}>('/v1/apiKeys', {
       address,
     });
     return body.apiKeys ?? [];
@@ -168,7 +172,11 @@ export class ArcusPerpsClient {
     return this.post<CreateApiKeyResponse>('/v1/createApiKey', request);
   }
 
-  private async get<T>(path: string, params: QueryParams = {}): Promise<T> {
+  /** Shared GET. Protected so the authenticated subclass reuses it verbatim. */
+  protected async getJson<T>(
+    path: string,
+    params: QueryParams = {},
+  ): Promise<T> {
     const url = new URL(this.baseUrl + path);
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined) url.searchParams.set(key, String(value));
@@ -190,7 +198,10 @@ export class ArcusPerpsClient {
   ): Promise<T> {
     return this.request<T>('POST', path, new URL(this.baseUrl + path), {
       headers: {'Content-Type': 'application/json', ...headers},
-      body: JSON.stringify(body),
+      // canonicalJson, not JSON.stringify: an order body carries `timestamp`
+      // in Unix nanoseconds, which a JS number cannot hold exactly. Sorted
+      // keys are incidental here — bigint fidelity is the point.
+      body: canonicalJson(body),
     });
   }
 

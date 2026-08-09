@@ -1,11 +1,16 @@
 import {describe, expect, it, vi} from 'vitest';
-import {PerpMarketNotFoundError, PerpsAlignmentError} from './errors.js';
+import {
+  PerpMarketNotFoundError,
+  PerpsAlignmentError,
+  PerpsOrderSizeError,
+} from './errors.js';
 import {
   compareDecimals,
   divideDecimals,
   floorToIncrement,
   MarketRegistry,
   multiplyDecimals,
+  toEngineOrder,
   toIncrements,
   toMarketSpec,
 } from './marketRegistry.js';
@@ -134,6 +139,60 @@ describe('toMarketSpec', () => {
     expect(spec).not.toHaveProperty('markPrice');
     expect(spec).not.toHaveProperty('fundingRate');
     expect(spec).not.toHaveProperty('isOutsideRth');
+  });
+});
+
+describe('toEngineOrder', () => {
+  const spec = toMarketSpec(makeMarket());
+
+  it('returns the human decimals and the engine integers together', () => {
+    expect(toEngineOrder(spec, '224.39', '0.5')).toEqual({
+      price: '224.39',
+      quantity: '0.5',
+      priceTicks: 22439n,
+      quantityQuantums: 5000000n,
+    });
+  });
+
+  it('rejects a price off the tick grid', () => {
+    expect(() => toEngineOrder(spec, '224.395', '0.5')).toThrow(
+      PerpsAlignmentError,
+    );
+  });
+
+  it('rejects a size off the step grid', () => {
+    expect(() => toEngineOrder(spec, '224.39', '0.50000005')).toThrow(
+      PerpsAlignmentError,
+    );
+  });
+
+  it('rejects a size above maxOrderSize', () => {
+    expect(() => toEngineOrder(spec, '224.39', '100001')).toThrow(
+      PerpsOrderSizeError,
+    );
+  });
+
+  it('rejects a size below minOrderSize', () => {
+    expect(() => toEngineOrder(spec, '224.39', '0.001')).toThrow(
+      PerpsOrderSizeError,
+    );
+  });
+
+  it('rejects a notional under the market minimum', () => {
+    // 0.01 * 224.39 = 2.24, under the $5 floor.
+    expect(() => toEngineOrder(spec, '224.39', '0.01')).toThrow(
+      /minOrderNotional/,
+    );
+  });
+
+  it('exempts a reduce-only order from the minimum notional', () => {
+    expect(
+      toEngineOrder(spec, '224.39', '0.01', {reduceOnly: true}),
+    ).toMatchObject({quantity: '0.01'});
+  });
+
+  it('rejects a zero or negative price', () => {
+    expect(() => toEngineOrder(spec, '0', '0.5')).toThrow(PerpsOrderSizeError);
   });
 });
 

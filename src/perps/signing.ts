@@ -229,8 +229,13 @@ export function buildLegacyMessage(
   return `${timestampNs.toString()}${action}${canonicalJson(body)}`;
 }
 
-/** The three headers every authenticated request carries. */
-export interface AuthHeaders {
+/**
+ * The three headers every authenticated request carries.
+ *
+ * Indexed rather than a closed shape so it drops straight into a header bag
+ * without a cast at every call site.
+ */
+export interface AuthHeaders extends Readonly<Record<string, string>> {
   readonly 'X-API-Key': string;
   readonly 'X-Timestamp': string;
   readonly 'X-Signature': string;

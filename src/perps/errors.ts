@@ -68,6 +68,23 @@ export class PerpsAuthError extends PerpsError {}
 export class PerpMarketNotFoundError extends PerpsError {}
 
 /**
+ * A size or notional falls outside what the market accepts — below
+ * `minOrderSize`, above `maxOrderSize`, or under the minimum notional.
+ * Caught before signing, since the engine would reject it anyway.
+ */
+export class PerpsOrderSizeError extends PerpsError {}
+
+/** The gateway rejected an order. Nothing rested and nothing filled. */
+export class PerpsOrderRejectedError extends PerpsError {
+  readonly reason: string;
+
+  constructor(message: string, reason: string) {
+    super(message);
+    this.reason = reason;
+  }
+}
+
+/**
  * A price or size does not sit exactly on the market's `tickSize` /
  * `stepSize` grid. The engine rejects these, so they are caught here — before
  * anything is signed — rather than round-tripped for a rejection.

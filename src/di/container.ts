@@ -14,8 +14,9 @@ import {createWalletProvider} from '../chain/walletProvider.js';
 import type {WalletProvider} from '../chain/walletProvider.js';
 import type {Config} from '../config/config.js';
 import type {SymbolConfig} from '../config/symbols.js';
-import {createLogger} from '../logging/logger.js';
 import type {Logger} from '../logging/logger.js';
+import type {ExecutionJournal} from '../journal/executionJournal.js';
+import {createJournal, createRunLogger} from './observability.js';
 import {PnlReporter} from '../pnl/pnlReporter.js';
 import {createRobinhoodPriceFeed} from '../prices/robinhoodPriceFeed.js';
 import {DepositService} from '../uniswap/depositService.js';
@@ -32,6 +33,8 @@ const SELL_SYMBOL = 'USDG';
 
 export interface Container {
   readonly logger: Logger;
+  /** Durable record of every fill and funding payment. */
+  readonly journal: ExecutionJournal;
   readonly wallet: WalletProvider;
   readonly swapService: SpotSwapService;
   /**
@@ -50,7 +53,8 @@ export interface Container {
 }
 
 export function createContainer(config: Config): Container {
-  const logger = createLogger();
+  const logger = createRunLogger(config);
+  const journal = createJournal(config);
   const chain = createRobinhoodChain(config.rpcUrl, config.chainId);
   const wallet = createWalletProvider(config.seed, chain, config.rpcUrl);
   const router = new SpotRouterClient({baseUrl: config.arcusRouterUrl});
@@ -185,6 +189,7 @@ export function createContainer(config: Config): Container {
 
   return {
     logger,
+    journal,
     wallet,
     swapService,
     createDepositService,

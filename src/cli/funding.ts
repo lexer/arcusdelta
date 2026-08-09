@@ -15,7 +15,7 @@ import {
   FundingHistoryFetcher,
 } from '../funding/fundingAnalyzer.js';
 import {buildUniverse} from '../funding/universe.js';
-import {createLogger} from '../logging/logger.js';
+import {createRunLogger} from '../di/observability.js';
 import {ArcusPerpsClient} from '../perps/arcusPerpsClient.js';
 import {MarketRegistry} from '../perps/marketRegistry.js';
 import {buildFundingReport} from './fundingCommand.js';
@@ -41,7 +41,7 @@ async function main(): Promise<number> {
     return 1;
   }
 
-  const logger = createLogger();
+  const logger = createRunLogger(config);
   const startedAt = Date.now();
   logger.info(
     {

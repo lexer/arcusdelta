@@ -27,6 +27,8 @@ export interface MarketDataConfig {
   readonly arcusApiUrl: string;
   readonly fundingLookbackDays: number;
   readonly fundingRequestIntervalMs: number;
+  readonly logDir: string;
+  readonly journalPath: string;
 }
 
 /**
@@ -93,6 +95,8 @@ export function loadMarketDataConfig(
     arcusApiUrl: env.ARCUS_API_URL,
     fundingLookbackDays: env.FUNDING_LOOKBACK_DAYS,
     fundingRequestIntervalMs: env.FUNDING_REQUEST_INTERVAL_MS,
+    logDir: env.LOG_DIR,
+    journalPath: env.JOURNAL_PATH,
   });
 }
 
@@ -108,6 +112,8 @@ export function loadConfig(source: EnvSource = readDotenv()): Config {
     arcusApiUrl: env.ARCUS_API_URL,
     fundingLookbackDays: env.FUNDING_LOOKBACK_DAYS,
     fundingRequestIntervalMs: env.FUNDING_REQUEST_INTERVAL_MS,
+    logDir: env.LOG_DIR,
+    journalPath: env.JOURNAL_PATH,
     usdgBuyAmount: env.USDG_BUY_AMOUNT,
     slippageBps: env.SLIPPAGE_BPS,
     rangeDeviationPercent: env.RANGE_DEVIATION_PERCENT,
@@ -135,6 +141,8 @@ export function loggableConfig(config: Config): Record<string, unknown> {
     arcusRouterUrl: config.arcusRouterUrl,
     arcusApiUrl: config.arcusApiUrl,
     arcusAccountIndex: config.arcusAccountIndex,
+    logDir: config.logDir,
+    journalPath: config.journalPath,
     /** Whether a key is configured — never the key itself. */
     arcusApiKeyConfigured: config.arcusApiPrivateKey !== undefined,
     fundingLookbackDays: config.fundingLookbackDays,

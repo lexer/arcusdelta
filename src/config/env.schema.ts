@@ -53,6 +53,14 @@ export const marketDataEnvSchema = z.object({
    * throttled on a wide scan.
    */
   FUNDING_REQUEST_INTERVAL_MS: z.coerce.number().int().min(0).default(1_000),
+
+  /** Directory for the daily structured run logs. Gitignored. */
+  LOG_DIR: z.string().min(1).default('logs'),
+  /**
+   * Append-only record of every fill and funding payment. Kept separate from
+   * the daily run logs because it is a contiguous ledger, not a debug trail.
+   */
+  JOURNAL_PATH: z.string().min(1).default('logs/executions.jsonl'),
 });
 
 export const envSchema = marketDataEnvSchema.extend({

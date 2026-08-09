@@ -23,6 +23,8 @@ import type {
   Bbo,
   CreateApiKeyRequest,
   CreateApiKeyResponse,
+  FundingPayment,
+  FundingPaymentsRequest,
   FundingRateSample,
   FundingRatesRequest,
   L2OrderBook,
@@ -126,6 +128,27 @@ export class ArcusPerpsClient {
       },
     );
     return body.fundingRates;
+  }
+
+  /**
+   * Realized funding payments on an account, newest-first. `payment` is
+   * signed — positive means the account received it, which for a short is the
+   * carry the strategy exists to collect.
+   */
+  async getFundingPayments(
+    request: FundingPaymentsRequest,
+  ): Promise<FundingPayment[]> {
+    const body = await this.getJson<{fundingPayments: FundingPayment[]}>(
+      '/v1/funding',
+      {
+        address: request.address,
+        accountIndex: request.accountIndex ?? 0,
+        from: request.from,
+        to: request.to,
+        limit: request.limit,
+      },
+    );
+    return body.fundingPayments ?? [];
   }
 
   async getAccount(address: string, accountIndex = 0): Promise<PerpAccount> {

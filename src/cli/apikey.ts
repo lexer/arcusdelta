@@ -15,7 +15,7 @@ import {Command} from 'commander';
 import {loadConfig, loggableConfig} from '../config/config.js';
 import {createRobinhoodChain} from '../chain/robinhoodChain.js';
 import {createWalletProvider} from '../chain/walletProvider.js';
-import {createLogger} from '../logging/logger.js';
+import {createRunLogger} from '../di/observability.js';
 import {ApiKeyService} from '../perps/apiKeyService.js';
 import {ArcusPerpsClient} from '../perps/arcusPerpsClient.js';
 import {PerpsError} from '../perps/errors.js';
@@ -60,7 +60,7 @@ async function main(): Promise<number> {
   }>();
 
   const config = loadConfig();
-  const logger = createLogger();
+  const logger = createRunLogger(config);
   const chain = createRobinhoodChain(config.rpcUrl, config.chainId);
   const wallet = createWalletProvider(config.seed, chain, config.rpcUrl);
   const client = new ArcusPerpsClient({

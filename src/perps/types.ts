@@ -95,6 +95,30 @@ export interface FundingRateSample {
   readonly time: number;
 }
 
+/**
+ * One realized funding payment on an account, from `GET /v1/funding`.
+ * `payment` is signed: **positive means the account received it**.
+ */
+export interface FundingPayment {
+  readonly marketId: number;
+  readonly marketDisplayName: string;
+  readonly fundingRate: string;
+  /** Signed position size when the payment was computed. */
+  readonly size: string;
+  readonly payment: string;
+  /** Epoch microseconds. */
+  readonly time: number;
+}
+
+export interface FundingPaymentsRequest {
+  readonly address: string;
+  readonly accountIndex?: number;
+  /** Epoch ms. Defaults to 30 days before `to` when omitted. */
+  readonly from?: number;
+  readonly to?: number;
+  readonly limit?: number;
+}
+
 export interface FundingRatesRequest {
   readonly market: string;
   /** Epoch milliseconds, inclusive. */

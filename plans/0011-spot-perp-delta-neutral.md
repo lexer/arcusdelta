@@ -116,6 +116,13 @@ That confirms the whole scheme-1 signing path against the live engine — canoni
 nanosecond `ct`/`X-Timestamp` agreement, and the bigint body timestamp — and confirms `ALO`
 is genuinely protective rather than silently crossing.
 
+The funding recorder was verified the same day against the live account: syncing SPCX-USD
+recorded 350 hourly payments totalling **16.640116**, against the exchange's own
+`cumulativeFunding.allTime` of **16.640116011** — an independent match. A second sync
+recorded 0, confirming the dedup. (That run's journal was deleted afterwards: SPCX is not a
+bot-managed position, and leaving it in would have credited the strategy with carry it
+never earned.)
+
 ## Decisions taken
 
 - **Uniswap comes out** in a dedicated cleanup commit, after the perps path works.
@@ -203,7 +210,27 @@ New:
 | `src/funding/universe.ts` | Intersects the spot token list with non-crypto perp markets; the tradable universe. |
 | `src/delta/pairService.ts` | The chunk loop above: orchestrates `PerpsShortService` + `SpotSwapService` for one symbol. |
 | `src/delta/pairMonitor.ts` | Long-running: margin health, delta drift, funding decay; unwinds when a rule fires. |
-| `src/delta/pairPnl.ts` | Spot realized (from chain logs, reusing the existing approach) + perp `unrealizedPnl` / `cumulativeFunding` from `GET /v1/positions` + `GET /v1/fundingPayments`. |
+| `src/delta/pairPnl.ts` | Spot realized (from chain logs, reusing the existing approach) + perp `unrealizedPnl` / `cumulativeFunding` from `GET /v1/positions` + `GET /v1/funding`. |
+| `src/journal/executionJournal.ts` | Append-only JSONL of every perp fill, spot fill, and funding payment. Synchronous writes — each event marks real money moving, so a crash right after a fill must not lose it. A torn final line does not make the rest unreadable. |
+| `src/journal/fundingRecorder.ts` | Mirrors `GET /v1/funding` into the journal, deduped by `(marketId, paymentTime)` read back from the journal itself rather than a separate cursor file that could disagree with it. Records only markets the strategy holds. |
+| `src/di/observability.ts` | Builds the run logger and journal for every command, so a new entrypoint cannot log to the console only and leave no durable record. |
+
+### Logging and the execution journal
+
+Two separate outputs, both under `LOG_DIR` (gitignored) and both configurable:
+
+- **Run logs** — `logs/arcusdelta-YYYY-MM-DD.jsonl`, one file per UTC day, written alongside
+  stdout. For debugging a flow. Redaction is set on the pino instance, not per stream, so a
+  secret cannot reach the file by a path that bypasses the console.
+- **Execution journal** — `logs/executions.jsonl` (`JOURNAL_PATH`), a contiguous ledger of
+  `perp-fill`, `spot-fill`, and `funding` events. For answering "what did we trade, at what
+  price, and what has the carry paid".
+
+The journal is a **record, not a source of truth**: PnL still reconstructs from chain logs
+and the exchange API, because the wallet gets used outside the bot and a local ledger
+silently drifts. The journal captures what reconstruction cannot recover — which chunk,
+which re-price attempt, what the quote promised — and is safe to delete. `--dry-run` gets a
+discarding journal so a rehearsal leaves nothing that later reads as a real fill.
 
 Reused unchanged: `src/arcus/spotSwapService.ts` (called with `twapChunks: 1` — chunking
 moves up into `pairService`), `src/arcus/tokenResolver.ts`, `src/chain/*`,

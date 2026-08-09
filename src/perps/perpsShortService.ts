@@ -54,6 +54,8 @@ export interface OpenShortRequest {
   readonly quantity: string;
   readonly repriceSeconds: number;
   readonly maxAttempts: number;
+  /** Ticks to post in front of the touch. See {@link MakerOrderRequest}. */
+  readonly improveTicks?: number;
 }
 
 export class PerpsShortService {
@@ -185,6 +187,9 @@ export class PerpsShortService {
       targetQuantity: request.quantity,
       repriceSeconds: request.repriceSeconds,
       maxAttempts: request.maxAttempts,
+      ...(request.improveTicks === undefined
+        ? {}
+        : {improveTicks: request.improveTicks}),
     });
   }
 
@@ -199,6 +204,9 @@ export class PerpsShortService {
       reduceOnly: true,
       repriceSeconds: request.repriceSeconds,
       maxAttempts: request.maxAttempts,
+      ...(request.improveTicks === undefined
+        ? {}
+        : {improveTicks: request.improveTicks}),
     });
   }
 

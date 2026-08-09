@@ -133,9 +133,15 @@ the bot declined to trade the market rather than net into it.
 **Not yet verified live: an actual maker fill.** It cannot be forced — a post-only order
 fills only when someone crosses into it.
 
-A full ~$12 pair rehearsal was attempted twice on **Sunday 2026-08-09**, first joining the
-touch (3 × 20s) and then one tick in front of it (4 × 45s). Neither filled, both aborted
-cleanly leaving no orders and no position. The cause is liquidity, not code: the equity
+A full ~$12 pair rehearsal was attempted twice on **Sunday 2026-08-09**, 3 × 20s and then
+4 × 45s. Neither filled, both aborted cleanly leaving no orders and no position.
+
+Both runs posted **at the touch** (224.38 every time). The second was intended to test one
+tick of improvement, but `PerpsShortService` did not forward `improveTicks` to the
+executor and the option was silently dropped — the run log records `improveTicks: 0`. The
+plumbing is fixed and covered by tests; **price improvement remains unverified live.**
+
+The cause of the no-fill is liquidity, not code: the equity
 underlying is closed at the weekend and NVDA-USD sees **256 trades/24h against BTC-USD's
 24,640** — roughly one trade every six minutes, spread across both sides and every price
 level. A maker fill on an RWA perp outside regular hours is a coin flip at best.

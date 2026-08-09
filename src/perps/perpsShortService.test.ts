@@ -216,6 +216,38 @@ describe('PerpsShortService.openShort / closeShort', () => {
     expect(fill.mock.calls[0]![0].reduceOnly).toBeUndefined();
   });
 
+  it('forwards improveTicks to the executor on open', async () => {
+    const {service, fill} = makeService();
+
+    await service.openShort({
+      tradeId: 't1',
+      symbol: 'NVDA',
+      spec: SPEC,
+      quantity: '0.5',
+      repriceSeconds: 3,
+      maxAttempts: 3,
+      improveTicks: 1,
+    });
+
+    expect(fill.mock.calls[0]![0].improveTicks).toBe(1);
+  });
+
+  it('forwards improveTicks to the executor on close', async () => {
+    const {service, fill} = makeService();
+
+    await service.closeShort({
+      tradeId: 't1',
+      symbol: 'NVDA',
+      spec: SPEC,
+      quantity: '0.5',
+      repriceSeconds: 3,
+      maxAttempts: 3,
+      improveTicks: 2,
+    });
+
+    expect(fill.mock.calls[0]![0].improveTicks).toBe(2);
+  });
+
   it('closes as a reduce-only maker buy, so it cannot flip to a long', async () => {
     const {service, fill} = makeService();
 

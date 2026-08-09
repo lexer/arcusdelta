@@ -21,14 +21,43 @@ export const usdgAmount = z
   .regex(/^\d+(\.\d+)?$/, 'must be a positive decimal number')
   .refine(value => Number(value) > 0, 'must be greater than zero');
 
-export const envSchema = z.object({
-  SEED: z.string().min(1, 'SEED is required (production wallet mnemonic)'),
-  RPC_URL: z.string().url().default('https://rpc.mainnet.chain.robinhood.com'),
+/**
+ * The subset a read-only market-data command needs.
+ *
+ * Split out so `npm run funding` — which ranks public funding history and
+ * touches no wallet — does not require `SEED` to be present just to start.
+ */
+export const marketDataEnvSchema = z.object({
   CHAIN_ID: z.coerce.number().int().positive().default(4663),
   ARCUS_ROUTER_URL: z
     .string()
     .url()
     .default('https://router.spot.arcus.xyz/v1'),
+  /** Arcus perpetuals gateway origin. Testnet is https://api.testnet.arcus.xyz. */
+  ARCUS_API_URL: z.string().url().default('https://api.arcus.xyz'),
+  /**
+   * How far back the funding analysis looks. Defaults to a quarter so at
+   * least one ex-dividend date falls inside the window — dividends are passed
+   * to longs through funding, so a shorter lookback systematically overstates
+   * what a short actually earns.
+   */
+  FUNDING_LOOKBACK_DAYS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(3650)
+    .default(90),
+  /**
+   * Delay between funding-history pages. `fundingRates` costs 20 weight
+   * against a bucket that refills at 25/second, so anything under ~800ms is
+   * throttled on a wide scan.
+   */
+  FUNDING_REQUEST_INTERVAL_MS: z.coerce.number().int().min(0).default(1_000),
+});
+
+export const envSchema = marketDataEnvSchema.extend({
+  SEED: z.string().min(1, 'SEED is required (production wallet mnemonic)'),
+  RPC_URL: z.string().url().default('https://rpc.mainnet.chain.robinhood.com'),
   /**
    * Fallback when a symbols.json entry omits its own usdgBuyAmount. No
    * default of its own: a symbol with no amount from either source is a
@@ -69,4 +98,5 @@ export const envSchema = z.object({
   MAX_PRICE_IMPACT_BPS: z.coerce.number().int().min(0).max(10_000).default(100),
 });
 
+export type MarketDataEnv = z.infer<typeof marketDataEnvSchema>;
 export type Env = z.infer<typeof envSchema>;

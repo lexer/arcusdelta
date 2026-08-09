@@ -28,8 +28,11 @@ Verified live against the mainnet API on 2026-08-09:
 - **RWA perp funding is structurally positive for shorts.** The base rate is
   **SOFR + 0.5%/yr**, charged hourly, with the premium added on top — so a short collects
   roughly the risk-free rate plus the premium, and pays dividends through (see Risks).
-  Measured short carry over the last ~42 days: SNDK 9.6%, QQQ 9.0%, MU 9.0%, GOOGL 8.4%,
-  META 8.3%, INTC 8.2% … SPY 4.4%, USO 1.7% APR.
+  Measured short carry over the **46 days of history the exchange holds** (2026-08-09,
+  `npm run funding`): SNDK 8.9%, QQQ 8.3%, MU 8.3%, ORCL 8.2%, GOOGL 7.8%, META 7.7%,
+  INTC 7.7% … COIN 4.6%, SPY 4.2%, AAPL 3.9%, SPCX 3.9%, USO 1.8% APR.
+  **46 days is all there is** — the venue is too young for a 90-day window, so no lookback
+  currently spans a full quarter. See the dividend caveat under Risks.
 - **Maker orders are free.** The base fee tier is `maker 0 ppm / taker 225 ppm`. NVDA's
   spread is ~4.5 bps. Posting rather than crossing saves ~2.2 bps of spread **and** 2.25 bps
   of fee on every perp fill — which is why the perp leg is executed as a resting

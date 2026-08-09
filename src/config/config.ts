@@ -5,14 +5,28 @@
  * at startup rather than surfacing as a failure mid-trade.
  */
 
+import type {z, ZodTypeAny} from 'zod';
 import dotenv from 'dotenv';
-import {envSchema} from './env.schema.js';
+import {envSchema, marketDataEnvSchema} from './env.schema.js';
 
 export class ConfigError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ConfigError';
   }
+}
+
+/**
+ * What a read-only market-data command needs. Deliberately excludes `seed`:
+ * `npm run funding` reads public data only and must not require a production
+ * wallet mnemonic just to start.
+ */
+export interface MarketDataConfig {
+  readonly chainId: number;
+  readonly arcusRouterUrl: string;
+  readonly arcusApiUrl: string;
+  readonly fundingLookbackDays: number;
+  readonly fundingRequestIntervalMs: number;
 }
 
 /**
@@ -23,11 +37,9 @@ export class ConfigError extends Error {
  * itself. There is no longer a single global stock token — see
  * `symbols.ts` for the per-symbol list.
  */
-export interface Config {
+export interface Config extends MarketDataConfig {
   readonly seed: string;
   readonly rpcUrl: string;
-  readonly chainId: number;
-  readonly arcusRouterUrl: string;
   /** Fallback only; a symbol with no amount from either source is a config error. */
   readonly usdgBuyAmount: string | undefined;
   readonly slippageBps: number;
@@ -50,21 +62,44 @@ function readDotenv(): EnvSource {
   return process.env;
 }
 
-export function loadConfig(source: EnvSource = readDotenv()): Config {
-  const result = envSchema.safeParse(source);
+/** Shared so both loaders report a bad environment the same way. */
+function parseEnv<S extends ZodTypeAny>(
+  schema: S,
+  source: EnvSource,
+): z.infer<S> {
+  const result = schema.safeParse(source);
   if (!result.success) {
     const details = result.error.issues
       .map(issue => `${issue.path.join('.')}: ${issue.message}`)
       .join('; ');
     throw new ConfigError(`Invalid environment configuration — ${details}`);
   }
+  return result.data;
+}
 
-  const env = result.data;
+export function loadMarketDataConfig(
+  source: EnvSource = readDotenv(),
+): MarketDataConfig {
+  const env = parseEnv(marketDataEnvSchema, source);
+  return Object.freeze({
+    chainId: env.CHAIN_ID,
+    arcusRouterUrl: env.ARCUS_ROUTER_URL,
+    arcusApiUrl: env.ARCUS_API_URL,
+    fundingLookbackDays: env.FUNDING_LOOKBACK_DAYS,
+    fundingRequestIntervalMs: env.FUNDING_REQUEST_INTERVAL_MS,
+  });
+}
+
+export function loadConfig(source: EnvSource = readDotenv()): Config {
+  const env = parseEnv(envSchema, source);
   return Object.freeze({
     seed: env.SEED,
     rpcUrl: env.RPC_URL,
     chainId: env.CHAIN_ID,
     arcusRouterUrl: env.ARCUS_ROUTER_URL,
+    arcusApiUrl: env.ARCUS_API_URL,
+    fundingLookbackDays: env.FUNDING_LOOKBACK_DAYS,
+    fundingRequestIntervalMs: env.FUNDING_REQUEST_INTERVAL_MS,
     usdgBuyAmount: env.USDG_BUY_AMOUNT,
     slippageBps: env.SLIPPAGE_BPS,
     rangeDeviationPercent: env.RANGE_DEVIATION_PERCENT,
@@ -86,6 +121,9 @@ export function loggableConfig(config: Config): Record<string, unknown> {
     rpcUrl: config.rpcUrl,
     chainId: config.chainId,
     arcusRouterUrl: config.arcusRouterUrl,
+    arcusApiUrl: config.arcusApiUrl,
+    fundingLookbackDays: config.fundingLookbackDays,
+    fundingRequestIntervalMs: config.fundingRequestIntervalMs,
     usdgBuyAmount: config.usdgBuyAmount,
     slippageBps: config.slippageBps,
     rangeDeviationPercent: config.rangeDeviationPercent,

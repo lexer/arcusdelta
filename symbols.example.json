@@ -12,5 +12,56 @@
     "twapChunks": 4,
     "twapIntervalSeconds": 15,
     "maxPriceImpactBps": 75
+  },
+  {
+    "symbol": "GME",
+    "stockTokenAddress": "0x1b0E319c6A659F002271B69dB8A7df2F911c153E",
+    "usdgBuyAmount": "5000",
+    "poolFee": 3000,
+    "rangeDeviationPercent": 3,
+    "twapChunks": 10,
+    "twapIntervalSeconds": 30,
+    "maxPriceImpactBps": 25
+  },
+  {
+    "symbol": "USAR",
+    "stockTokenAddress": "0xd917B029C761D264c6A312BBbcDA868658eF86a6",
+    "usdgBuyAmount": "5000",
+    "poolFee": 3000,
+    "rangeDeviationPercent": 3,
+    "twapChunks": 3,
+    "twapIntervalSeconds": 30,
+    "maxPriceImpactBps": 25
+  },
+
+  {
+    "symbol": "NVDA",
+    "stockTokenAddress": "0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC",
+    "usdgBuyAmount": "1000",
+    "poolFee": 3000,
+    "rangeDeviationPercent": 1,
+    "twapChunks": 10,
+    "twapIntervalSeconds": 30,
+    "maxPriceImpactBps": 25
+  },
+  {
+    "symbol": "AAPL",
+    "stockTokenAddress": "0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9",
+    "usdgBuyAmount": "1000",
+    "poolFee": 3000,
+    "rangeDeviationPercent": 1,
+    "twapChunks": 10,
+    "twapIntervalSeconds": 30,
+    "maxPriceImpactBps": 25
+  },
+    {
+    "symbol": "SPY",
+    "stockTokenAddress": "0x117cc2133c37b721f49de2a7a74833232b3b4c0c",
+    "usdgBuyAmount": "10000",
+    "poolFee": 3000,
+    "rangeDeviationPercent": 1,
+    "twapChunks": 2,
+    "twapIntervalSeconds": 30,
+    "maxPriceImpactBps": 25
   }
 ]

@@ -303,6 +303,110 @@ describe('PairMonitor funding sync', () => {
   });
 });
 
+describe('PairMonitor resilience', () => {
+  const outage = () => {
+    throw new Error('Arcus router returned no quote for this pair');
+  };
+
+  it('reports a pair it could not value instead of throwing', async () => {
+    const {opportunities, failed} = await makeMonitor({
+      pairs: [makePair({quoteSpotExit: outage})],
+    }).check();
+
+    expect(opportunities).toHaveLength(0);
+    expect(failed).toEqual([
+      {market: 'NVDA-USD', error: expect.stringContaining('no quote')},
+    ]);
+  });
+
+  it('keeps valuing the other pairs when one venue is down', async () => {
+    const {opportunities, failed} = await makeMonitor({
+      pairs: [
+        makePair({symbol: 'AAPL', market: 'AAPL-USD', quoteSpotExit: outage}),
+        makePair(),
+      ],
+      positions: [
+        makePosition({marketDisplayName: 'AAPL-USD', marketId: 29}),
+        makePosition(),
+      ],
+    }).check();
+
+    expect(failed.map(f => f.market)).toEqual(['AAPL-USD']);
+    expect(opportunities.map(o => o.symbol)).toEqual(['NVDA']);
+  });
+
+  it('still records funding for a pair whose valuation failed', async () => {
+    const sync = vi
+      .fn()
+      .mockResolvedValue({recorded: 0, skipped: 0, recordedTotal: 0});
+    const monitor = new PairMonitor({
+      pairs: [makePair({quoteSpotExit: outage})],
+      shorts: {positions: vi.fn().mockResolvedValue([makePosition()])},
+      marketData: {getBbo: vi.fn()},
+      journal: memoryJournal(),
+      logger,
+      minProfitBps: 0,
+      deltaToleranceBps: 100,
+      checkIntervalSeconds: 30,
+      funding: {sync},
+      sleep: async () => {},
+    });
+
+    await monitor.check();
+
+    // Ownership does not depend on a quote succeeding.
+    expect(sync).toHaveBeenCalledTimes(1);
+  });
+
+  it('survives a whole pass failing and carries on', async () => {
+    const positions = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('gateway 503'))
+      .mockResolvedValue([makePosition()]);
+    const monitor = new PairMonitor({
+      pairs: [makePair()],
+      shorts: {positions},
+      marketData: {getBbo: vi.fn()},
+      journal: memoryJournal([spotBuy('NVDA', '11.93454', '0.0529')]),
+      logger,
+      minProfitBps: 0,
+      deltaToleranceBps: 100,
+      checkIntervalSeconds: 30,
+      sleep: async () => {},
+    });
+    const lines: string[] = [];
+
+    await monitor.run({maxPasses: 2, print: l => void lines.push(l)});
+
+    const output = lines.join('\n');
+    expect(output).toContain('pass failed: gateway 503');
+    expect(output).toContain('pass 2');
+    expect(output).toContain('NVDA');
+  });
+
+  it('gives up after a sustained run of failures rather than looping silently', async () => {
+    const monitor = new PairMonitor({
+      pairs: [makePair()],
+      shorts: {positions: vi.fn().mockRejectedValue(new Error('gateway 503'))},
+      marketData: {getBbo: vi.fn()},
+      journal: memoryJournal(),
+      logger,
+      minProfitBps: 0,
+      deltaToleranceBps: 100,
+      checkIntervalSeconds: 30,
+      sleep: async () => {},
+    });
+    const lines: string[] = [];
+
+    await monitor.run({maxPasses: 50, print: l => void lines.push(l)});
+
+    const output = lines.join('\n');
+    expect(output).toContain('10 passes in a row have failed');
+    expect(output).toContain('Open positions are untouched');
+    expect(output).not.toContain('pass 11');
+  });
+});
+
 describe('PairMonitor.run', () => {
   it('prints a table each pass and stops after maxPasses', async () => {
     const lines: string[] = [];

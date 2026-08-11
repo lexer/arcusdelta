@@ -136,9 +136,7 @@ async function main(): Promise<number> {
     `  perp position   SHORT ${position.size} @ ${position.averageEntryPrice}`,
   );
   print(`  spot balance    ${spotBalance} ${symbol}`);
-  print(
-    `  chunks          ${pieces.length} x ~${pieces[0]}, ${config.twapIntervalSeconds}s apart`,
-  );
+  print(`  chunks          ${pieces.length} x ~${pieces[0]}`);
   print(
     `  perp leg        reduce-only POST-ONLY limit, ${config.makerMaxAttempts} x ${config.makerRepriceSeconds}s, ${improveTicks} tick(s) in front`,
   );
@@ -146,11 +144,16 @@ async function main(): Promise<number> {
     `  spot leg        sold after each perp chunk fills, ${config.slippageBps} bps slippage`,
   );
   print('');
-  print('Each chunk buys the perp back first, then sells the matching spot,');
+  print('Each chunk buys the perp back first, waits for that maker order to');
+  print('fill, sells the matching spot, and only then pauses');
   print(
-    'so net delta returns to flat between chunks. Maker only: a chunk that',
+    `${config.twapIntervalSeconds}s before the next chunk — so a slow fill delays the`,
   );
-  print('will not fill stops the unwind rather than crossing the spread.');
+  print('next chunk rather than overlapping with it, and net delta returns to');
+  print(
+    'flat between chunks. Maker only: a chunk that will not fill stops the',
+  );
+  print('unwind rather than crossing the spread.');
   print('');
   print('This is a PRODUCTION wallet holding real funds.');
   print('');

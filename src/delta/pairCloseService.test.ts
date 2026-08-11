@@ -153,6 +153,99 @@ describe('PairCloseService.close', () => {
     ]);
   });
 
+  it('waits for the fill and the spot sell before starting the interval', async () => {
+    // The interval is a pause *between* completed chunks, not a schedule the
+    // chunks fire on: a slow maker fill delays the next chunk, it does not
+    // overlap with it.
+    const order: string[] = [];
+    const closeShort = vi.fn(async (r: {quantity: string}) => {
+      order.push('perp:start');
+      await new Promise(resolve => setTimeout(resolve, 5));
+      order.push('perp:filled');
+      return {
+        filledQuantity: r.quantity,
+        averageFillPrice: '218',
+        attempts: 1,
+        orderIds: ['o1'],
+        complete: true,
+      };
+    });
+    const executeSell = vi.fn(async () => {
+      order.push('spot:start');
+      await new Promise(resolve => setTimeout(resolve, 5));
+      order.push('spot:settled');
+      return {
+        tradeId: 't',
+        txHashes: ['0xabc' as const],
+        orderId: undefined,
+        sellAmount: '1000000000000000000',
+        buyAmount: '1000000',
+        minBuyAmount: '999000',
+      };
+    });
+    const service = new PairCloseService({
+      shorts: {closeShort, positionFor: vi.fn()},
+      spotSeller: {executeSell},
+      readSpotBalanceAtoms: async () => 23_000000000000000000n,
+      journal: memoryJournal(),
+      logger,
+      sleep: async () => void order.push('interval'),
+    });
+
+    await service.close(request({quantity: '2', chunks: 2}));
+
+    expect(order).toEqual([
+      'perp:start',
+      'perp:filled',
+      'spot:start',
+      'spot:settled',
+      'interval',
+      'perp:start',
+      'perp:filled',
+      'spot:start',
+      'spot:settled',
+    ]);
+  });
+
+  it('does not wait after the final chunk', async () => {
+    const order: string[] = [];
+    const {service} = makeService({order});
+    const sleeps: number[] = [];
+    const timed = new PairCloseService({
+      shorts: {
+        closeShort: vi.fn(async (r: {quantity: string}) => ({
+          filledQuantity: r.quantity,
+          averageFillPrice: '218',
+          attempts: 1,
+          orderIds: ['o1'],
+          complete: true,
+        })),
+        positionFor: vi.fn(),
+      },
+      spotSeller: {
+        executeSell: vi.fn(async () => ({
+          tradeId: 't',
+          txHashes: [] as const,
+          orderId: undefined,
+          sellAmount: '1',
+          buyAmount: '1',
+          minBuyAmount: '1',
+        })),
+      },
+      readSpotBalanceAtoms: async () => 23_000000000000000000n,
+      journal: memoryJournal(),
+      logger,
+      sleep: async (ms: number) => void sleeps.push(ms),
+    });
+
+    await timed.close(request({quantity: '3', chunks: 3}));
+    void service;
+    void order;
+
+    // Three chunks, two gaps.
+    expect(sleeps).toEqual([30_000, 30_000]);
+  });
+
   it('sells exactly what the perp leg actually closed', async () => {
     // A partial maker fill must not lead to over-selling spot.
     const closeShort = vi.fn().mockResolvedValue({

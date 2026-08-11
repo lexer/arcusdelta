@@ -5,7 +5,11 @@ import type {
 } from '../journal/executionJournal.js';
 import {createLogger} from '../logging/logger.js';
 import type {PerpPosition} from '../perps/types.js';
-import {PairMonitor, spotCostFromJournal} from './pairMonitor.js';
+import {
+  costBasisIsPlausible,
+  PairMonitor,
+  spotCostFromJournal,
+} from './pairMonitor.js';
 import type {WatchedPair} from './pairMonitor.js';
 
 const logger = createLogger('silent');
@@ -228,6 +232,70 @@ describe('PairMonitor.check', () => {
   });
 });
 
+describe('costBasisIsPlausible', () => {
+  it('accepts a cost basis near the position notional', () => {
+    expect(costBasisIsPlausible('5012', '5020')).toBe(true);
+  });
+
+  it('tolerates the drift a real price move produces', () => {
+    expect(costBasisIsPlausible('5000', '4000')).toBe(true);
+    expect(costBasisIsPlausible('5000', '7000')).toBe(true);
+  });
+
+  it('rejects a cost basis orders of magnitude off', () => {
+    // The real failure: $12 recorded against a $5,020 position.
+    expect(costBasisIsPlausible('11.93454', '5020')).toBe(false);
+  });
+
+  it('rejects a missing cost basis rather than reading it as free', () => {
+    expect(costBasisIsPlausible('0', '5020')).toBe(false);
+  });
+});
+
+describe('PairMonitor cost-basis guard', () => {
+  it('refuses to value a pair whose journal is missing fills', async () => {
+    const {opportunities, failed} = await makeMonitor({
+      // 23 NVDA at 225 is ~5,175 of position against 11.93 recorded.
+      positions: [makePosition({size: '-23', markPx: '225'})],
+      pairs: [makePair({readSpotBalance: async () => '23'})],
+      journal: memoryJournal([spotBuy('NVDA', '11.93454', '0.0529')]),
+    }).check();
+
+    expect(opportunities).toHaveLength(0);
+    expect(failed[0]!.error).toContain('implausible');
+    expect(failed[0]!.error).toContain('missing fills');
+  });
+
+  it('emits no CLOSE signal from an unusable cost basis', async () => {
+    const lines: string[] = [];
+    await makeMonitor({
+      positions: [makePosition({size: '-23', markPx: '225'})],
+      pairs: [makePair({readSpotBalance: async () => '23'})],
+      journal: memoryJournal([spotBuy('NVDA', '11.93454', '0.0529')]),
+      minProfitBps: 5,
+    }).run({maxPasses: 1, print: l => void lines.push(l)});
+
+    expect(lines.join('\n')).not.toContain('CLOSE');
+    expect(lines.join('\n')).not.toContain('above threshold');
+  });
+
+  it('values normally once the journal reflects the real cost', async () => {
+    const {opportunities, failed} = await makeMonitor({
+      positions: [makePosition({size: '-23', markPx: '225'})],
+      pairs: [
+        makePair({
+          readSpotBalance: async () => '23',
+          quoteSpotExit: async () => '5150',
+        }),
+      ],
+      journal: memoryJournal([spotBuy('NVDA', '5175', '23')]),
+    }).check();
+
+    expect(failed).toHaveLength(0);
+    expect(opportunities).toHaveLength(1);
+  });
+});
+
 describe('PairMonitor funding sync', () => {
   it('records newly settled funding before valuing', async () => {
     const sync = vi.fn().mockResolvedValue({
@@ -437,6 +505,5 @@ describe('PairMonitor.run', () => {
 
     const output = lines.join('\n');
     expect(output).toContain('above threshold');
-    expect(output).toContain('npm run close');
   });
 });

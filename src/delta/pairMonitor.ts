@@ -25,7 +25,15 @@ import type {ExecutionJournal} from '../journal/executionJournal.js';
 import type {FundingRecorder} from '../journal/fundingRecorder.js';
 import type {Logger} from '../logging/logger.js';
 import type {ArcusPerpsClient} from '../perps/arcusPerpsClient.js';
-import {absDecimals, addDecimals, subtractDecimals} from '../perps/decimal.js';
+import {
+  absDecimals,
+  addDecimals,
+  compareDecimals,
+  divideDecimals,
+  isPositive,
+  multiplyDecimals,
+  subtractDecimals,
+} from '../perps/decimal.js';
 import {isManagedPair} from '../perps/perpsShortService.js';
 import type {PerpsShortService} from '../perps/perpsShortService.js';
 import type {PerpPosition} from '../perps/types.js';
@@ -46,6 +54,16 @@ const defaultSleep: Sleep = ms =>
  * because the usual cause is a venue being briefly unavailable.
  */
 const MAX_CONSECUTIVE_FAILURES = 10;
+
+/**
+ * How far the journal's recorded spot cost may sit from the position's own
+ * notional before it is treated as unusable.
+ *
+ * The cost basis is the one input the exchange cannot corroborate, so a gap
+ * this wide means the journal is missing fills rather than that the trade went
+ * badly — and a missing cost basis produces a large, confident, wrong profit.
+ */
+const MAX_COST_BASIS_DRIFT = 0.5;
 
 /** One configured symbol the monitor knows how to value. */
 export interface WatchedPair {
@@ -113,6 +131,24 @@ export function spotCostFromJournal(
         : subtractDecimals(cost, event.buyAmount);
   }
   return cost;
+}
+
+/**
+ * True when the recorded spot cost is within {@link MAX_COST_BASIS_DRIFT} of
+ * what the position is currently worth. A zero or missing cost never is.
+ */
+export function costBasisIsPlausible(
+  spotCostUsdg: string,
+  impliedNotional: string,
+): boolean {
+  if (!isPositive(spotCostUsdg) || !isPositive(impliedNotional)) return false;
+  const drift = absDecimals(
+    divideDecimals(
+      subtractDecimals(spotCostUsdg, impliedNotional),
+      impliedNotional,
+    ),
+  );
+  return compareDecimals(drift, String(MAX_COST_BASIS_DRIFT)) <= 0;
 }
 
 export class PairMonitor {
@@ -184,6 +220,23 @@ export class PairMonitor {
         this.options.logger.error(
           {market: pair.market, error: message},
           'could not value this pair; the position is unchanged',
+        );
+        continue;
+      }
+
+      // The exchange knows the position; only the journal knows what the spot
+      // leg cost. If the two disagree by more than half, the journal is
+      // incomplete — refuse rather than emit a confident wrong number.
+      const impliedNotional = multiplyDecimals(quantity, position.markPx);
+      if (!costBasisIsPlausible(spotCostUsdg, impliedNotional)) {
+        const detail =
+          `recorded spot cost ${spotCostUsdg} USDG is implausible against a ` +
+          `position worth ~${impliedNotional} USDG — the execution journal is ` +
+          'missing fills, so this pair cannot be valued';
+        failed.push({market: pair.market, error: detail});
+        this.options.logger.error(
+          {market: pair.market, spotCostUsdg, impliedNotional},
+          'refusing to value a pair with an implausible cost basis',
         );
         continue;
       }
@@ -320,8 +373,7 @@ export class PairMonitor {
       if (ready.length > 0) {
         options.print('');
         options.print(
-          `  ${ready.map(o => o.symbol).join(', ')} above threshold — ` +
-            'run `npm run close` to realize.',
+          `  ${ready.map(o => o.symbol).join(', ')} above threshold.`,
         );
       }
 

@@ -121,6 +121,20 @@ export const envSchema = marketDataEnvSchema.extend({
   /** How far spot and perp sizes may drift before a pair is disowned. */
   MAX_DELTA_BPS: z.coerce.number().int().min(0).max(10_000).default(100),
   PAIR_CHECK_INTERVAL_SECONDS: z.coerce.number().int().positive().default(60),
+
+  /**
+   * How long one resting maker order is given before it is cancelled and
+   * re-priced at the new touch. Longer means fewer cancels and better queue
+   * position; shorter means the order chases a moving book.
+   */
+  MAKER_REPRICE_SECONDS: z.coerce.number().int().positive().default(60),
+  /** Re-price attempts per chunk before giving up on filling as a maker. */
+  MAKER_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
+  /**
+   * Ticks to post in front of the touch. 0 joins the best price and queues
+   * behind it; 1 becomes the best bid or offer for one tick of edge.
+   */
+  MAKER_IMPROVE_TICKS: z.coerce.number().int().min(0).default(1),
 });
 
 export type MarketDataEnv = z.infer<typeof marketDataEnvSchema>;

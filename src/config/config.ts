@@ -57,6 +57,9 @@ export interface Config extends MarketDataConfig {
   readonly minCloseProfitBps: number;
   readonly maxDeltaBps: number;
   readonly pairCheckIntervalSeconds: number;
+  readonly makerRepriceSeconds: number;
+  readonly makerMaxAttempts: number;
+  readonly makerImproveTicks: number;
 }
 
 export type EnvSource = Record<string, string | undefined>;
@@ -118,6 +121,9 @@ export function loadConfig(source: EnvSource = readDotenv()): Config {
     minCloseProfitBps: env.MIN_CLOSE_PROFIT_BPS,
     maxDeltaBps: env.MAX_DELTA_BPS,
     pairCheckIntervalSeconds: env.PAIR_CHECK_INTERVAL_SECONDS,
+    makerRepriceSeconds: env.MAKER_REPRICE_SECONDS,
+    makerMaxAttempts: env.MAKER_MAX_ATTEMPTS,
+    makerImproveTicks: env.MAKER_IMPROVE_TICKS,
   });
 }
 
@@ -147,5 +153,8 @@ export function loggableConfig(config: Config): Record<string, unknown> {
     minCloseProfitBps: config.minCloseProfitBps,
     maxDeltaBps: config.maxDeltaBps,
     pairCheckIntervalSeconds: config.pairCheckIntervalSeconds,
+    makerRepriceSeconds: config.makerRepriceSeconds,
+    makerMaxAttempts: config.makerMaxAttempts,
+    makerImproveTicks: config.makerImproveTicks,
   };
 }

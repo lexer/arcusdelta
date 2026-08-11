@@ -11,6 +11,7 @@
     "build": "tsc -p tsconfig.build.json",
     "funding": "tsx src/cli/funding.ts",
     "watch": "tsx src/cli/watch.ts",
+    "close": "tsx src/cli/close.ts",
     "apikey": "tsx src/cli/apikey.ts",
     "lint": "gts lint",
     "fix": "gts fix",

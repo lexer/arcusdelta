@@ -25,6 +25,7 @@ import {MarketRegistry} from '../perps/marketRegistry.js';
 import {isManagedPair, PerpsShortService} from '../perps/perpsShortService.js';
 import {PerpsRequestSigner} from '../perps/signing.js';
 import {alwaysYes, print, promptYes} from './prompt.js';
+import {loadSelectedSymbols} from './symbolSelection.js';
 
 async function main(): Promise<number> {
   const program = new Command()
@@ -59,6 +60,19 @@ async function main(): Promise<number> {
   const journal = createJournal(config, options.dryRun === true);
   const address = wallet.getAccount().address;
   const symbol = options.symbol.toUpperCase();
+
+  // Every execution parameter comes from the symbol's own entry, falling back
+  // to the .env defaults — the same resolution the rest of the strategy uses.
+  // Reading the globals directly here meant a symbols.json saying 10 chunks
+  // silently planned 1.
+  const [settings] = loadSelectedSymbols(config, symbol);
+  if (settings === undefined) {
+    process.stderr.write(
+      `${symbol} is not in symbols.json — add it, or the execution ` +
+        'parameters for this unwind are undefined.\n',
+    );
+    return 1;
+  }
 
   const reader = new ArcusPerpsClient({baseUrl: config.arcusApiUrl, logger});
   const client = new AuthenticatedPerpsClient({
@@ -124,7 +138,7 @@ async function main(): Promise<number> {
 
   const openSize = absDecimals(position.size);
   const quantity = options.quantity ?? openSize;
-  const chunks = options.chunks ? Number(options.chunks) : config.twapChunks;
+  const chunks = options.chunks ? Number(options.chunks) : settings.twapChunks;
   const improveTicks = options.improveTicks
     ? Number(options.improveTicks)
     : config.makerImproveTicks;
@@ -141,13 +155,13 @@ async function main(): Promise<number> {
     `  perp leg        reduce-only POST-ONLY limit, ${config.makerMaxAttempts} x ${config.makerRepriceSeconds}s, ${improveTicks} tick(s) in front`,
   );
   print(
-    `  spot leg        sold after each perp chunk fills, ${config.slippageBps} bps slippage`,
+    `  spot leg        sold after each perp chunk fills, ${settings.slippageBps} bps slippage`,
   );
   print('');
   print('Each chunk buys the perp back first, waits for that maker order to');
   print('fill, sells the matching spot, and only then pauses');
   print(
-    `${config.twapIntervalSeconds}s before the next chunk — so a slow fill delays the`,
+    `${settings.twapIntervalSeconds}s before the next chunk — so a slow fill delays the`,
   );
   print('next chunk rather than overlapping with it, and net delta returns to');
   print(
@@ -190,11 +204,11 @@ async function main(): Promise<number> {
     spot: {address: tokenAddress, decimals: token.decimals},
     quantity,
     chunks,
-    intervalSeconds: config.twapIntervalSeconds,
+    intervalSeconds: settings.twapIntervalSeconds,
     repriceSeconds: config.makerRepriceSeconds,
     maxAttempts: config.makerMaxAttempts,
     improveTicks,
-    slippageBps: config.slippageBps,
+    slippageBps: settings.slippageBps,
   });
 
   print('');
